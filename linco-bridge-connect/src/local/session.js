@@ -47,6 +47,7 @@ function sendSessionInfo(ws, session, config) {
     capabilities: {
       incomingAttachments: true,
       multimodalImages: ['claude', 'hermes', 'openclaw'].includes(session.agentType),
+      bridgeHistoryCursor: true,
     },
   });
 }

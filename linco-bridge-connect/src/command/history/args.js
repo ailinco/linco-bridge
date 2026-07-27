@@ -9,6 +9,7 @@ const {
   MAX_LOCAL_SESSIONS_LIMIT,
   DEFAULT_CODEX_CHATS_LIMIT,
 } = require('./constants');
+const { MAX_HISTORY_CURSOR_LENGTH } = require('./cursor');
 
 function parseSessionsArgs(rawArg) {
   const trimmed = String(rawArg || '').trim();
@@ -140,9 +141,19 @@ function parseHistoryArgs(rawArg) {
     let limit = DEFAULT_HISTORY_ROUNDS_LIMIT;
     let sawLimit = false;
     let includeThinking = false;
-    for (const arg of parsed.args) {
+    let beforeCursor = '';
+    for (let i = 0; i < parsed.args.length; i++) {
+      const arg = parsed.args[i];
       if (isHistoryThinkingFlag(arg)) {
         includeThinking = true;
+        continue;
+      }
+      const cursor = readHistoryCursorArg(parsed.args, i);
+      if (cursor) {
+        if (cursor.invalid) return invalidHistoryCursorUsage();
+        if (beforeCursor) return invalidHistoryCursorUsage();
+        beforeCursor = cursor.value;
+        i = cursor.nextIndex;
         continue;
       }
       if (/^\d+$/.test(arg) && !sawLimit) {
@@ -155,7 +166,12 @@ function parseHistoryArgs(rawArg) {
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_HISTORY_ROUNDS_LIMIT) {
       return { ok: false, message: `/history [--thinking] [limit], limit range is 1-${MAX_HISTORY_ROUNDS_LIMIT}.` };
     }
-    return { ok: true, limit, includeThinking };
+    return {
+      ok: true,
+      limit,
+      includeThinking,
+      ...(beforeCursor ? { beforeCursor } : {}),
+    };
   }
 }
 
@@ -167,10 +183,19 @@ function parseChatHistoryArgs(trimmed) {
   let limit = DEFAULT_HISTORY_ROUNDS_LIMIT;
   let sawLimit = false;
   let includeThinking = false;
+  let beforeCursor = '';
   for (let i = 0; i < parsed.args.length; i++) {
     const arg = parsed.args[i];
     if (isHistoryThinkingFlag(arg)) {
       includeThinking = true;
+      continue;
+    }
+    const cursor = readHistoryCursorArg(parsed.args, i);
+    if (cursor) {
+      if (cursor.invalid) return invalidHistoryCursorUsage();
+      if (beforeCursor) return invalidHistoryCursorUsage();
+      beforeCursor = cursor.value;
+      i = cursor.nextIndex;
       continue;
     }
     if (arg === '--chat') {
@@ -195,7 +220,13 @@ function parseChatHistoryArgs(trimmed) {
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_HISTORY_ROUNDS_LIMIT) {
     return { ok: false, message: `/history --chat <chat-id> [limit], limit range is 1-${MAX_HISTORY_ROUNDS_LIMIT}.` };
   }
-  return { ok: true, chatId, limit, includeThinking };
+  return {
+    ok: true,
+    chatId,
+    limit,
+    includeThinking,
+    ...(beforeCursor ? { beforeCursor } : {}),
+  };
 }
 
 function parseProjectHistoryArgs(trimmed) {
@@ -207,10 +238,19 @@ function parseProjectHistoryArgs(trimmed) {
   let limit = DEFAULT_HISTORY_ROUNDS_LIMIT;
   let sawLimit = false;
   let includeThinking = false;
+  let beforeCursor = '';
   for (let i = 0; i < parsed.args.length; i++) {
     const arg = parsed.args[i];
     if (isHistoryThinkingFlag(arg)) {
       includeThinking = true;
+      continue;
+    }
+    const cursor = readHistoryCursorArg(parsed.args, i);
+    if (cursor) {
+      if (cursor.invalid) return invalidHistoryCursorUsage();
+      if (beforeCursor) return invalidHistoryCursorUsage();
+      beforeCursor = cursor.value;
+      i = cursor.nextIndex;
       continue;
     }
     if (arg === '--project') {
@@ -248,7 +288,40 @@ function parseProjectHistoryArgs(trimmed) {
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_HISTORY_ROUNDS_LIMIT) {
     return { ok: false, message: `用法：/history --project <项目路径> --session <session-id> [数量]，数量范围 1-${MAX_HISTORY_ROUNDS_LIMIT}。` };
   }
-  return { ok: true, limit, projectPath, sessionId, includeThinking };
+  return {
+    ok: true,
+    limit,
+    projectPath,
+    sessionId,
+    includeThinking,
+    ...(beforeCursor ? { beforeCursor } : {}),
+  };
+}
+
+function readHistoryCursorArg(args, index) {
+  const arg = args[index];
+  let value = '';
+  let nextIndex = index;
+  if (arg === '--before-cursor') {
+    value = String(args[index + 1] || '').trim();
+    nextIndex = index + 1;
+  } else if (arg.startsWith('--before-cursor=')) {
+    value = arg.slice('--before-cursor='.length).trim();
+  } else {
+    return null;
+  }
+  if (
+    !value ||
+    value.length > MAX_HISTORY_CURSOR_LENGTH ||
+    !/^[A-Za-z0-9_-]+$/u.test(value)
+  ) {
+    return { invalid: true, value: '', nextIndex };
+  }
+  return { value, nextIndex };
+}
+
+function invalidHistoryCursorUsage() {
+  return { ok: false, message: 'Usage: /history [--before-cursor <cursor>] [--thinking] [limit].' };
 }
 
 function isHistoryThinkingFlag(arg) {

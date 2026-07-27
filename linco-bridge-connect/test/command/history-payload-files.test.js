@@ -43,6 +43,26 @@ test('history thinking flag is opt-in', () => {
   });
 });
 
+test('history args accept an opaque before cursor', () => {
+  assert.deepEqual(parseHistoryArgs('--before-cursor cursor_abc --thinking 5'), {
+    ok: true,
+    limit: 5,
+    includeThinking: true,
+    beforeCursor: 'cursor_abc',
+  });
+  assert.deepEqual(
+    parseHistoryArgs('--project "/tmp/demo" --session session-1 --before-cursor=cursor_xyz 5'),
+    {
+      ok: true,
+      limit: 5,
+      projectPath: '/tmp/demo',
+      sessionId: 'session-1',
+      includeThinking: false,
+      beforeCursor: 'cursor_xyz',
+    },
+  );
+});
+
 test('buildHistoryPayload only includes thinking when parser provides items', () => {
   const plain = buildHistoryPayload('codex', 'sess-1', 10, [{
     user: 'question',
@@ -60,6 +80,26 @@ test('buildHistoryPayload only includes thinking when parser provides items', ()
   }]);
   assert.equal(withThinking.rounds[0].thinking.text, 'checking files\n\nreasoning summary');
   assert.equal(withThinking.rounds[0].thinking.items[0].mode, 'progress');
+});
+
+test('buildHistoryPayload exposes cursor page metadata as protocol v3', () => {
+  const payload = buildHistoryPayload('codex', 'sess-1', 5, [{
+    user: 'question',
+    assistant: 'answer',
+  }], {
+    pageInfo: {
+      hasMore: true,
+      nextCursor: 'cursor_abc',
+      snapshotId: 'snapshot_1',
+    },
+  });
+
+  assert.equal(payload.version, 3);
+  assert.deepEqual(payload.pageInfo, {
+    hasMore: true,
+    nextCursor: 'cursor_abc',
+    snapshotId: 'snapshot_1',
+  });
 });
 
 test('buildHistoryPayload keeps stable identities across rolling windows', () => {
@@ -185,6 +225,72 @@ test('parseRecentHistoryRounds scans only the suffix and preserves chronological
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
+test('history cursor remains stable when newer rounds append', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-cursor-history-'));
+  const transcriptPath = path.join(tempDir, 'history.jsonl');
+  const records = [];
+  const appendRound = (index) => {
+    records.push({
+      type: 'event_msg',
+      timestamp: `2026-07-20T00:${String(index).padStart(2, '0')}:00.000Z`,
+      payload: { type: 'user_message', message: `question ${index}` },
+    });
+    records.push({
+      type: 'event_msg',
+      timestamp: `2026-07-20T00:${String(index).padStart(2, '0')}:01.000Z`,
+      payload: {
+        type: 'agent_message',
+        phase: 'final_answer',
+        message: `answer ${index}`,
+      },
+    });
+  };
+  for (let index = 1; index <= 8; index++) appendRound(index);
+  fs.writeFileSync(transcriptPath, `${records.map(JSON.stringify).join('\n')}\n`);
+
+  try {
+    const latest = parseRecentHistoryRounds(transcriptPath, {
+      agentType: 'codex',
+      sessionId: 'desktop-session-1',
+      limit: 2,
+    });
+    assert.deepEqual(latest.rounds.map((round) => round.user), [
+      'question 7',
+      'question 8',
+    ]);
+    assert.equal(latest.pageInfo.hasMore, true);
+    assert.ok(latest.pageInfo.nextCursor);
+
+    for (let index = 9; index <= 12; index++) appendRound(index);
+    fs.writeFileSync(transcriptPath, `${records.map(JSON.stringify).join('\n')}\n`);
+
+    const older = parseRecentHistoryRounds(transcriptPath, {
+      agentType: 'codex',
+      sessionId: 'desktop-session-1',
+      limit: 2,
+      beforeCursor: latest.pageInfo.nextCursor,
+    });
+    assert.deepEqual(older.rounds.map((round) => round.user), [
+      'question 5',
+      'question 6',
+    ]);
+    assert.equal(older.pageInfo.hasMore, true);
+    assert.notEqual(older.pageInfo.nextCursor, latest.pageInfo.nextCursor);
+
+    assert.throws(
+      () => parseRecentHistoryRounds(transcriptPath, {
+        agentType: 'codex',
+        sessionId: 'desktop-session-2',
+        limit: 2,
+        beforeCursor: latest.pageInfo.nextCursor,
+      }),
+      (error) => error?.code === 'bridge_history_cursor_invalid',
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('parseRecentHistoryRounds detects descending storage and normalizes output order', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-desc-history-'));
   const transcriptPath = path.join(tempDir, 'history.jsonl');
@@ -217,6 +323,7 @@ test('parseRecentHistoryRounds detects descending storage and normalizes output 
 
   const result = await parseRecentHistoryRounds(transcriptPath, {
     agentType: 'codex',
+    sessionId: 'descending-session-1',
     limit: 2,
   });
 
@@ -230,6 +337,29 @@ test('parseRecentHistoryRounds detects descending storage and normalizes output 
     'answer 4',
     'answer 5',
   ]);
+  assert.equal(result.pageInfo.hasMore, true);
+
+  const older = parseRecentHistoryRounds(transcriptPath, {
+    agentType: 'codex',
+    sessionId: 'descending-session-1',
+    limit: 2,
+    beforeCursor: result.pageInfo.nextCursor,
+  });
+  assert.deepEqual(older.rounds.map((round) => round.user), [
+    'question 2',
+    'question 3',
+  ]);
+  assert.equal(older.pageInfo.hasMore, true);
+
+  const oldest = parseRecentHistoryRounds(transcriptPath, {
+    agentType: 'codex',
+    sessionId: 'descending-session-1',
+    limit: 2,
+    beforeCursor: older.pageInfo.nextCursor,
+  });
+  assert.deepEqual(oldest.rounds.map((round) => round.user), ['question 1']);
+  assert.equal(oldest.pageInfo.hasMore, false);
+  assert.equal(oldest.pageInfo.nextCursor, null);
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 

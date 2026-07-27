@@ -11,6 +11,14 @@ const {
   stringOrEmpty,
   timestampToMs,
 } = require('./utils');
+const {
+  decodeHistoryCursor,
+  describeHistorySource,
+  encodeHistoryCursor,
+  historySessionToken,
+  historySnapshotId,
+  invalidHistoryCursor,
+} = require('./cursor');
 
 // Codex JSONL records can contain multi-megabyte context snapshots. A larger
 // block avoids repeatedly copying the same partial line while staying bounded.
@@ -172,7 +180,32 @@ function parseRecentHistoryRounds(filePath, options = {}) {
   const fd = fs.openSync(filePath, 'r');
   try {
     const stat = fs.fstatSync(fd);
-    const snapshotSize = stat.size;
+    const decodedCursor = options.beforeCursor
+      ? decodeHistoryCursor(options.beforeCursor)
+      : null;
+    const sessionId = stringOrEmpty(options.sessionId);
+    if (decodedCursor && !sessionId) {
+      throw invalidHistoryCursor('历史游标缺少会话身份');
+    }
+    const source = describeHistorySource(
+      fd,
+      filePath,
+      stat,
+      decodedCursor?.prefixBytes,
+    );
+    if (decodedCursor) {
+      const cursorSessionToken = historySessionToken(agentType, sessionId);
+      if (
+        decodedCursor.agentType !== agentType ||
+        decodedCursor.sessionToken !== cursorSessionToken ||
+        decodedCursor.sourceKey !== source.sourceKey ||
+        decodedCursor.prefixHash !== source.prefixHash ||
+        stat.size < decodedCursor.snapshotSize
+      ) {
+        throw invalidHistoryCursor('历史来源或会话已变化');
+      }
+    }
+    const snapshotSize = decodedCursor?.snapshotSize ?? stat.size;
     const sourceVersion = `${stat.ino || 0}:${snapshotSize}:${Math.trunc(stat.mtimeMs || 0)}`;
     const cacheKey = [
       agentType,
@@ -180,6 +213,7 @@ function parseRecentHistoryRounds(filePath, options = {}) {
       sourceVersion,
       limit,
       options.includeThinking === true ? 'thinking' : 'plain',
+      options.beforeCursor || 'latest',
     ].join('|');
     const cached = recentHistoryCache.get(cacheKey);
     if (cached) {
@@ -193,23 +227,43 @@ function parseRecentHistoryRounds(filePath, options = {}) {
           cacheHit: true,
           parseMs: Date.now() - startedAt,
         },
+        pageInfo: cached.pageInfo,
       };
     }
 
-    const order = detectHistoryStorageOrder(fd, snapshotSize, agentType);
+    const order = decodedCursor
+      ? { storageOrder: decodedCursor.storageOrder, source: 'cursor' }
+      : detectHistoryStorageOrder(fd, snapshotSize, agentType);
+    const readLimit = limit + 1;
     let selected;
-    if (order.storageOrder === 'descending') {
-      selected = readRecentDescendingRecords(
+    if (decodedCursor && order.storageOrder === 'descending') {
+      selected = readDescendingRecords(
         fd,
         snapshotSize,
-        limit,
+        readLimit,
         agentType,
+        decodedCursor.boundaryOffset,
+      );
+    } else if (decodedCursor) {
+      selected = readRecentAscendingRecords(
+        fd,
+        decodedCursor.boundaryOffset,
+        readLimit,
+        agentType,
+      );
+    } else if (order.storageOrder === 'descending') {
+      selected = readDescendingRecords(
+        fd,
+        snapshotSize,
+        readLimit,
+        agentType,
+        0,
       );
     } else {
       selected = readRecentAscendingRecords(
         fd,
         snapshotSize,
-        limit,
+        readLimit,
         agentType,
       );
     }
@@ -218,12 +272,30 @@ function parseRecentHistoryRounds(filePath, options = {}) {
       ? parseCodexHistoryRecords(selected.records, options)
       : parseClaudeHistoryRecords(selected.records, options);
     const rounds = parsed.slice(-limit);
+    const hasMore = parsed.length > limit;
+    const boundaryRound = rounds[0];
+    const boundaryOffset = order.storageOrder === 'descending'
+      ? boundaryRound?.sourceEndOffset
+      : boundaryRound?.sourceOffset;
+    const snapshotId = historySnapshotId(source, snapshotSize);
+    const nextCursor = hasMore && Number.isSafeInteger(boundaryOffset)
+      ? encodeHistoryCursor({
+          agentType,
+          sessionId,
+          source,
+          snapshotSize,
+          storageOrder: order.storageOrder,
+          boundaryOffset,
+        })
+      : null;
+    const pageInfo = { hasMore, nextCursor, snapshotId };
     const syncMeta = {
       strategy: selected.strategy,
       storageOrder: order.storageOrder,
       orderSource: order.source,
       sourceVersion,
       sourceBytes: snapshotSize,
+      currentSourceBytes: stat.size,
       scannedBytes: selected.scannedBytes,
       parsedRecords: selected.records.length,
       returnedRounds: rounds.length,
@@ -232,10 +304,12 @@ function parseRecentHistoryRounds(filePath, options = {}) {
         0,
       ),
       cacheHit: false,
+      pageMode: decodedCursor ? 'older' : 'latest',
+      snapshotId,
       parseMs: Date.now() - startedAt,
     };
-    putRecentHistoryCache(cacheKey, { rounds, syncMeta });
-    return { rounds, syncMeta };
+    putRecentHistoryCache(cacheKey, { rounds, syncMeta, pageInfo });
+    return { rounds, syncMeta, pageInfo };
   } finally {
     fs.closeSync(fd);
   }
@@ -396,15 +470,16 @@ function locateRecentAscendingStart(
   return { startOffset: 0, scannedBytes, found: false };
 }
 
-function readRecentDescendingRecords(
+function readDescendingRecords(
   fd,
   snapshotSize,
   limit,
   agentType,
+  startOffset,
 ) {
   const records = [];
   let userCount = 0;
-  const range = readJsonlRangeRecords(fd, 0, snapshotSize, {
+  const range = readJsonlRangeRecords(fd, startOffset, snapshotSize, {
     includePartialStart: true,
     includePartialEnd: true,
     visitor(item) {
@@ -458,6 +533,7 @@ function readJsonlRangeRecords(fd, start, end, options = {}) {
       const item = parseJsonlBuffer(
         data.subarray(lineStart, index),
         dataOffset + lineStart,
+        dataOffset + index + 1,
       );
       if (item) {
         records.push(item);
@@ -473,7 +549,11 @@ function readJsonlRangeRecords(fd, start, end, options = {}) {
   }
 
   if (shouldContinue && pending.length > 0 && options.includePartialEnd === true) {
-    const item = parseJsonlBuffer(pending, pendingOffset);
+    const item = parseJsonlBuffer(
+      pending,
+      pendingOffset,
+      pendingOffset + pending.length,
+    );
     if (item) {
       records.push(item);
       if (options.visitor) visitor(item);
@@ -482,7 +562,7 @@ function readJsonlRangeRecords(fd, start, end, options = {}) {
   return { records, scannedBytes };
 }
 
-function parseJsonlBuffer(buffer, byteOffset) {
+function parseJsonlBuffer(buffer, byteOffset, byteEndOffset) {
   const value = buffer.toString('utf8').replace(/\r$/u, '').trim();
   if (!value) return null;
   try {
@@ -491,6 +571,12 @@ function parseJsonlBuffer(buffer, byteOffset) {
         Number.isInteger(byteOffset) && byteOffset >= 0) {
       Object.defineProperty(parsed, '__historyByteOffset', {
         value: byteOffset,
+        enumerable: false,
+      });
+      Object.defineProperty(parsed, '__historyByteEndOffset', {
+        value: Number.isInteger(byteEndOffset)
+          ? byteEndOffset
+          : byteOffset + buffer.length,
         enumerable: false,
       });
     }
@@ -586,6 +672,7 @@ function parseClaudeHistoryRecords(records, options = {}) {
         assistantFiles: [],
         userTimestamp: extractHistoryTimestamp(item),
         sourceOffset: item.__historyByteOffset,
+        sourceEndOffset: item.__historyByteEndOffset,
       };
       if (includeThinking) {
         current.thinkingItems = [];
@@ -808,6 +895,7 @@ function parseCodexHistoryRecords(records, options = {}) {
         assistantFiles: [],
         userTimestamp: extractHistoryTimestamp(item),
         sourceOffset: item.__historyByteOffset,
+        sourceEndOffset: item.__historyByteEndOffset,
       };
       if (includeThinking) current.thinkingItems = [];
       rounds.push(current);

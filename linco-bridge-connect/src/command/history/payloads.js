@@ -185,7 +185,7 @@ function stableHistoryRoundIdentity(agentType, sessionId, round, ordinal) {
 
 function buildHistoryPayload(agentType, sessionId, requestedLimit, rounds, options = {}) {
   const payload = {
-    version: 2,
+    version: options.pageInfo ? 3 : 2,
     agentType,
     agentSessionId: sessionId,
     workspace: options.workspace || undefined,
@@ -234,6 +234,13 @@ function buildHistoryPayload(agentType, sessionId, requestedLimit, rounds, optio
       return payloadRound;
     }),
   };
+  if (options.pageInfo && typeof options.pageInfo === 'object') {
+    payload.pageInfo = {
+      hasMore: options.pageInfo.hasMore === true,
+      nextCursor: options.pageInfo.nextCursor || null,
+      snapshotId: options.pageInfo.snapshotId || null,
+    };
+  }
   if (options.syncMeta && typeof options.syncMeta === 'object') {
     payload.syncMeta = { ...options.syncMeta };
     payload.syncMeta.payloadBytes = Buffer.byteLength(JSON.stringify(payload));

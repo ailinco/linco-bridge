@@ -499,6 +499,7 @@ function sendSessionInfo(ws, session, config) {
       multimodalImages: ['claude', 'hermes', 'openclaw'].includes(session.agentType),
       remoteIm: true,
       agentType: session.agentType,
+      bridgeHistoryCursor: true,
     },
   });
 }

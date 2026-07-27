@@ -8,8 +8,8 @@ function sendSystem(ws, text) {
   send(ws, 'system', { text });
 }
 
-function sendError(ws, text) {
-  send(ws, 'error', { text });
+function sendError(ws, text, code) {
+  send(ws, 'error', { text, ...(code ? { code } : {}) });
 }
 
 function agentSessionIdFrom(session, payload = {}) {

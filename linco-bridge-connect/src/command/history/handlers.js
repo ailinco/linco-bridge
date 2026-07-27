@@ -228,7 +228,11 @@ function readRecentHistory(ws, transcriptPath, options) {
   try {
     return parseRecentHistoryRounds(transcriptPath, options);
   } catch (error) {
-    sendError(ws, `读取本地历史失败: ${error?.message || 'unknown error'}`);
+    sendError(
+      ws,
+      `读取本地历史失败: ${error?.message || 'unknown error'}`,
+      error?.code,
+    );
     return null;
   }
 }
@@ -258,8 +262,10 @@ function handleHistory(rawArg, ws, session, options = {}) {
     }
     const history = readRecentHistory(ws, matched.transcriptPath, {
       agentType,
+      sessionId: matched.id,
       limit: parsed.limit,
       includeThinking: parsed.includeThinking === true,
+      beforeCursor: parsed.beforeCursor,
     });
     if (!history) return;
     const recent = history.rounds;
@@ -282,6 +288,7 @@ function handleHistory(rawArg, ws, session, options = {}) {
       replaceConversation: options.historyReload === true,
       switchedSession: bindResult.switched,
       syncMeta: history.syncMeta,
+      pageInfo: history.pageInfo,
     }));
     return;
   }
@@ -326,8 +333,10 @@ function handleHistory(rawArg, ws, session, options = {}) {
 
   const history = readRecentHistory(ws, resolved.transcriptPath, {
     agentType,
+    sessionId: agentSessionId,
     limit: parsed.limit,
     includeThinking: parsed.includeThinking === true,
+    beforeCursor: parsed.beforeCursor,
   });
   if (!history) return;
   const recent = history.rounds;
@@ -338,6 +347,7 @@ function handleHistory(rawArg, ws, session, options = {}) {
       replaceConversation: options.historyReload === true,
       switchedSession: bindResult.switched,
       syncMeta: history.syncMeta,
+      pageInfo: history.pageInfo,
     }));
     return;
   }
@@ -347,6 +357,7 @@ function handleHistory(rawArg, ws, session, options = {}) {
     replaceConversation: options.historyReload === true,
     switchedSession: bindResult.switched,
     syncMeta: history.syncMeta,
+    pageInfo: history.pageInfo,
   }));
 }
 

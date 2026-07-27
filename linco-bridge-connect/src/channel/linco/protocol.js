@@ -250,6 +250,7 @@ function mapLocalEventToLinco(event, session, config, linco) {
         type: "outbound_message",
         messageId: `linco-${event.type}-${Date.now()}`,
         text: event.text || "",
+        code: event.code,
         actions: event.actions,
         quickActions: event.quickActions,
         quickReplies: event.quickReplies,
