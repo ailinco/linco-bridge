@@ -25,7 +25,7 @@
   ·
   <a href="https://bridge-demo.lincotalk.com">在线 Demo</a>
   ·
-  <a href="docs/media/linco-bridge-demo.mov">Demo 视频</a>
+  <a href="https://www.bilibili.com/video/BV18Fgf6CEpC/">观看演示</a>
   ·
   <a href="docs/zh-CN/quick-start.md">快速开始</a>
   ·

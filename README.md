@@ -25,7 +25,7 @@
   ·
   <a href="https://bridge-demo.lincotalk.com">Hosted Demo</a>
   ·
-  <a href="docs/media/linco-bridge-demo.mov">Demo Video</a>
+  <a href="https://www.bilibili.com/video/BV18Fgf6CEpC/">Watch Demo</a>
   ·
   <a href="docs/quick-start.md">Quick Start</a>
   ·
