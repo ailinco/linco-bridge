@@ -1,6 +1,6 @@
 {
   "name": "linco-connect",
-  "version": "1.2.38",
+  "version": "1.2.39",
   "description": "Local Agent connector for Linco Bridge channels",
   "license": "MIT",
   "main": "server.js",
