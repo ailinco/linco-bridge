@@ -231,7 +231,7 @@ linco-connect start --local-im
 
 Agent 需要把文件发给用户时，应将文件保存到当前工作目录或会话运行目录，并且必须在回复中返回 Markdown 文件引用，链接目标必须是绝对路径，例如 `[report.md](D:\path\report.md)`，不要只返回裸文件路径或相对路径。Agent 可见提示词只描述这个返回格式，不暴露 `/get` 命令或下发实现细节；远端 IM 点击引用后会发送 `/get <路径>`，连接器校验后返回文件 base64。
 
-连接器会判断路径是绝对路径还是相对当前工作目录的路径，并校验文件位于当前工作目录、运行目录或附件目录内，且满足普通文件、大小限制、隐藏路径和危险扩展名规则；校验通过后，远端 IM 会收到带 `mediaName`、`mediaType`、`mediaBase64`、`size` 和 `references` 的 `outbound_message`。
+连接器会判断路径是绝对路径还是相对路径。相对路径只从当前工作目录、运行目录或附件目录解析；绝对路径还允许位于 `/project` 当前列出的任一项目中。读取前会按真实路径重新校验项目归属，拒绝通过软链接跳出允许目录，并继续执行普通文件、大小限制、隐藏路径和危险扩展名规则。校验通过后，远端 IM 会收到带 `mediaName`、`mediaType`、`mediaBase64`、`size` 和 `references` 的 `outbound_message`。
 
 默认不允许 `/get` 读取隐藏文件或隐藏目录下的文件，例如 `.env`、`.git/config`、`.ssh/*`。如确有兼容需要，可显式设置 `ALLOW_HIDDEN_GET_FILES=1` 或配置 `allowHiddenGetFiles: true`。
 
@@ -273,7 +273,7 @@ Agent 需要把文件发给用户时，应将文件保存到当前工作目录�
 | `/cd <路径>` | 将指定目录绑定为当前项目并开启新 Agent 会话；仅 Claude/Codex |
 | `/project` | 从 Claude/Codex 本地记录中列出已知项目，远端 IM 可渲染按钮选择；仅 Claude/Codex |
 | `/project --select <路径>` | 将指定目录绑定为当前项目并开启新 Agent 会话；仅 Claude/Codex |
-| `/sessions [limit]` | 列出当前项目最近的本地 Agent 会话；仅 Claude/Codex |
+| `/sessions [--project <路径>] [--project-id <项目ID>] [limit]` | 列出当前项目最近的本地 Agent 会话；Codex 项目 ID 用于合并显式归属会话与未改派的同目录会话；仅 Claude/Codex |
 | `/chats [limit]` | 列出 Codex Desktop 侧边栏 Chats；仅 Codex |
 | `/bind <Session ID>` | 将未绑定的 IM 会话绑定到当前项目内已有 Agent 会话；仅 Claude/Codex |
 | `/bind --chat <Chat ID>` | 将未绑定的 IM 会话绑定到已有 Codex Desktop Chat；仅 Codex |
@@ -286,7 +286,7 @@ Agent 需要把文件发给用户时，应将文件保存到当前工作目录�
 | `/reload` | 刷新当前 Agent 记忆，下次消息重新加载本地历史，并尝试预启动进程 |
 | `/pc` | 显示 PC 端打开当前 Agent 会话的命令；支持 Claude 和 Codex |
 | `/base` | 显示运行目录和附件目录 |
-| `/get <路径>` | 按需读取当前工作目录、运行目录或附件目录内的非隐藏文件，并返回给前端 |
+| `/get <路径>` | 按需读取当前工作目录、`/project` 项目、运行目录或附件目录内的非隐藏文件，并返回给前端 |
 | `/approve` | 显示当前审批模式 |
 | `/approve manual` | 手动确认权限请求和危险操作 |
 | `/approve auto` | 自动确认权限请求和危险操作，保留默认权限边界 |

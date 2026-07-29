@@ -120,19 +120,24 @@ function allowedGetRoots(session) {
   return [session.workspace, session.runtimeDir, session.attachmentsDir].filter(Boolean);
 }
 
-function validateGetFile(filePath, session, config) {
+function validateGetFile(filePath, session, config, options = {}) {
   const resolved = path.resolve(filePath);
-  if (!allowedGetRoots(session).some(root => isInsideOrSame(resolved, root))) {
-    return { ok: false, code: 'outside_allowed_roots', message: '拒绝读取该路径：只能获取当前工作目录、运行目录或附件目录内的文件。' };
+  const access = resolveAllowedFileAccess(resolved, session, options);
+  if (!access) {
+    return {
+      ok: false,
+      code: 'outside_allowed_roots',
+      message: '拒绝读取该路径：只能获取当前工作目录、/project 项目、运行目录或附件目录内的文件。',
+    };
   }
 
-  if (!config.allowHiddenGetFiles && hasHiddenPathSegment(resolved, session)) {
+  if (!config.allowHiddenGetFiles && hasHiddenAccessPathSegment(access)) {
     return { ok: false, code: 'hidden_path', message: `拒绝读取隐藏文件或隐藏目录下的文件：${path.basename(resolved)}` };
   }
 
   let stat;
   try {
-    stat = fs.statSync(resolved);
+    stat = fs.statSync(access.filePath);
   } catch {
     return { ok: false, code: 'missing', message: `文件不存在：${resolved}` };
   }
@@ -153,22 +158,28 @@ function validateGetFile(filePath, session, config) {
     };
   }
 
-  if (!config.allowUnsafeAttachments && isUnsafeAttachmentPath(resolved, config)) {
+  if (!config.allowUnsafeAttachments && isUnsafeAttachmentPath(access.filePath, config)) {
     return { ok: false, code: 'unsafe', message: `出于安全原因，默认不允许下发该类型文件：${path.basename(resolved)}` };
   }
 
-  return { ok: true, path: resolved, size: stat.size };
+  return {
+    ok: true,
+    path: resolved,
+    readPath: access.filePath,
+    size: stat.size,
+  };
 }
 
-function buildOutboundFileMessage(session, filePath, size) {
+function buildOutboundFileMessage(session, filePath, size, options = {}) {
   const name = path.basename(filePath);
+  const readPath = options.readPath || filePath;
   return {
     messageId: `linco-get-${Date.now()}`,
     text: `文件：${name}`,
     references: [buildFileReference(filePath, session)],
     mediaName: name,
     mediaType: mimeFromFilename(name),
-    mediaBase64: fs.readFileSync(filePath).toString('base64'),
+    mediaBase64: fs.readFileSync(readPath).toString('base64'),
     size,
   };
 }
@@ -240,6 +251,7 @@ function mimeFromFilename(name) {
     case '.webp': return 'image/webp';
     case '.svg': return 'image/svg+xml';
     case '.txt': return 'text/plain; charset=utf-8';
+    case '.vue': return 'text/plain; charset=utf-8';
     case '.md': return 'text/markdown; charset=utf-8';
     case '.csv': return 'text/csv; charset=utf-8';
     case '.json': return 'application/json';
@@ -278,16 +290,88 @@ function isUnsafeAttachmentPath(filePath, config) {
   return new Set(config.unsafeAttachmentExtensions || []).has(ext);
 }
 
-function hasHiddenPathSegment(filePath, session = {}) {
-  const roots = allowedGetRoots(session)
-    .map(root => path.resolve(root))
-    .sort((a, b) => b.length - a.length);
-  const root = roots.find(item => isInsideOrSame(filePath, item));
-  const relative = root ? path.relative(root, path.resolve(filePath)) : path.resolve(filePath);
+function resolveAllowedFileAccess(filePath, session = {}, options = {}) {
+  const requestedPath = path.resolve(filePath);
+  const realFilePath = safeRealpath(requestedPath);
+  const roots = allowedAbsoluteGetRoots(session, options.projectRoots);
+
+  if (realFilePath) {
+    const root = roots.find(item =>
+      item.realPath && isInsideOrSame(realFilePath, item.realPath)
+    );
+    if (!root) return null;
+    return {
+      requestedPath,
+      filePath: realFilePath,
+      root,
+    };
+  }
+
+  const root = roots.find(item => isInsideOrSame(requestedPath, item.requestedPath));
+  if (!root) return null;
+  return {
+    requestedPath,
+    filePath: requestedPath,
+    root,
+  };
+}
+
+function allowedAbsoluteGetRoots(session, projectRoots = []) {
+  const knownProjectRoots = Array.isArray(projectRoots) ? projectRoots : [];
+  const roots = [...allowedGetRoots(session), ...knownProjectRoots].filter(Boolean);
+  const seen = new Set();
+  return roots
+    .map(root => {
+      const requestedPath = path.resolve(root);
+      const realPath = safeRealpath(requestedPath);
+      const key = realPath || requestedPath;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      return { requestedPath, realPath };
+    })
+    .filter(Boolean)
+    .sort((a, b) =>
+      (b.realPath || b.requestedPath).length -
+      (a.realPath || a.requestedPath).length
+    );
+}
+
+function safeRealpath(value) {
+  try {
+    return fs.realpathSync.native(value);
+  } catch {
+    return '';
+  }
+}
+
+function hasHiddenAccessPathSegment(access) {
+  const requestedRoot = access.root.requestedPath;
+  if (
+    isInsideOrSame(access.requestedPath, requestedRoot) &&
+    hasHiddenRelativePath(access.requestedPath, requestedRoot)
+  ) {
+    return true;
+  }
+  const realRoot = access.root.realPath;
+  return Boolean(
+    realRoot &&
+    isInsideOrSame(access.filePath, realRoot) &&
+    hasHiddenRelativePath(access.filePath, realRoot)
+  );
+}
+
+function hasHiddenRelativePath(filePath, root) {
+  const relative = path.relative(root, filePath);
   return relative
     .split(path.sep)
     .filter(Boolean)
     .some(segment => segment.length > 1 && segment.startsWith('.'));
+}
+
+function hasHiddenPathSegment(filePath, session = {}) {
+  const access = resolveAllowedFileAccess(filePath, session);
+  if (!access) return false;
+  return hasHiddenAccessPathSegment(access);
 }
 
 function isInsideOrSame(filePath, dir) {

@@ -5,6 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 const Database = require('better-sqlite3');
 const { encodeClaudeProjectDir } = require('../../src/command/project');
+const { buildBindActions } = require('../../src/command/history/payloads');
 const {
   collectClaudeProjectSessions,
   collectCodexProjectSessions,
@@ -181,6 +182,200 @@ test('Codex SQLite listing supports legacy threads schema', () => {
 
   const sessions = collectCodexProjectSessions(homeDir, project, { limit: 10 });
   assert.deepEqual(sessions.map(item => item.id), ['codex-legacy-session']);
+});
+
+test('Codex SQLite listing uses session index titles shown by Codex PC', () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-codex-sqlite-pc-title-'));
+  const project = path.join(homeDir, 'code', 'codex-sqlite-project');
+  const codexDir = path.join(homeDir, '.codex');
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(codexDir, { recursive: true });
+
+  fs.writeFileSync(path.join(codexDir, 'session_index.jsonl'), JSON.stringify({
+    id: 'codex-indexed-title',
+    thread_name: '生成算法备案文档',
+    updated_at: '2026-07-28T10:17:46.730845Z',
+  }));
+  createCodexStateDb(codexDir, LEGACY_THREADS_SCHEMA, {
+    columns: [
+      'id', 'rollout_path', 'cwd', 'title', 'first_user_message', 'preview',
+      'archived', 'updated_at', 'updated_at_ms', 'recency_at_ms',
+    ],
+    values: [
+      ['codex-indexed-title', path.join(codexDir, 'indexed-title.jsonl'), project, '算法备案文档编写', '原始用户问题', '', 0, 0, 1778060000000, 1778060000000],
+      ['codex-sqlite-fallback', path.join(codexDir, 'sqlite-fallback.jsonl'), project, 'SQLite fallback title', 'fallback prompt', '', 0, 0, 1778050000000, 1778050000000],
+    ],
+  });
+
+  const sessions = collectCodexProjectSessions(homeDir, project, { limit: 10 });
+
+  assert.deepEqual(sessions.map(item => item.id), [
+    'codex-indexed-title',
+    'codex-sqlite-fallback',
+  ]);
+  assert.deepEqual(sessions.map(item => item.title), [
+    '生成算法备案文档',
+    'SQLite fallback title',
+  ]);
+  assert.equal(sessions[0].firstMessage, '原始用户问题');
+});
+
+test('Codex SQLite listing treats project assignments as cwd overrides', () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-codex-project-assignments-'));
+  const project = path.join(homeDir, 'code', 'assigned-project');
+  const otherWorkspace = path.join(homeDir, 'worktrees', 'assigned-project-task');
+  const codexDir = path.join(homeDir, '.codex');
+  const projectId = 'codex-project-assigned';
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(otherWorkspace, { recursive: true });
+  fs.mkdirSync(codexDir, { recursive: true });
+
+  fs.writeFileSync(path.join(codexDir, '.codex-global-state.json'), JSON.stringify({
+    'local-projects': {
+      [projectId]: { id: projectId, name: 'Assigned project', rootPaths: [project] },
+    },
+    'thread-project-assignments': {
+      'codex-root-session': { projectKind: 'local', projectId, cwd: project },
+      'codex-worktree-session': { projectKind: 'local', projectId, cwd: otherWorkspace },
+      'codex-other-project-session': {
+        projectKind: 'local',
+        projectId: 'codex-project-other',
+        cwd: project,
+      },
+    },
+  }));
+  createCodexStateDb(codexDir, FULL_THREADS_SCHEMA, {
+    columns: [
+      'id', 'rollout_path', 'cwd', 'title', 'first_user_message', 'preview',
+      'archived', 'updated_at', 'updated_at_ms', 'recency_at_ms', 'thread_source', 'source',
+    ],
+    values: [
+      ['codex-root-session', path.join(codexDir, 'root.jsonl'), project, 'root', 'root prompt', '', 0, 0, 1778050000000, 1778050000000, 'user', 'appServer'],
+      ['codex-worktree-session', path.join(codexDir, 'worktree.jsonl'), otherWorkspace, 'worktree', 'worktree prompt', '', 0, 0, 1778070000000, 1778070000000, 'user', 'appServer'],
+      ['codex-unassigned-session', path.join(codexDir, 'unassigned.jsonl'), project, 'unassigned', 'unassigned prompt', '', 0, 0, 1778065000000, 1778065000000, 'user', 'appServer'],
+      ['codex-other-project-session', path.join(codexDir, 'other.jsonl'), project, 'other', 'other prompt', '', 0, 0, 1778060000000, 1778060000000, 'user', 'appServer'],
+    ],
+  });
+
+  const sessions = collectCodexProjectSessions(homeDir, project, { projectId, limit: 10 });
+
+  assert.deepEqual(sessions.map(item => item.id), [
+    'codex-worktree-session',
+    'codex-unassigned-session',
+    'codex-root-session',
+  ]);
+  assert.deepEqual(
+    buildBindActions(sessions, project).map(action => action.command),
+    [
+      `/bind --project ${otherWorkspace} codex-worktree-session`,
+      `/bind --project ${project} codex-unassigned-session`,
+      `/bind --project ${project} codex-root-session`,
+    ],
+  );
+});
+
+test('Codex project assignments fill SQLite-missing sessions from JSONL by ID', () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-codex-project-assignment-fill-'));
+  const project = path.join(homeDir, 'code', 'assigned-project');
+  const otherWorkspace = path.join(homeDir, 'worktrees', 'assigned-project-task');
+  const codexDir = path.join(homeDir, '.codex');
+  const sessionsDir = path.join(codexDir, 'sessions', '2026', '07', '29');
+  const projectId = 'codex-project-assignment-fill';
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(otherWorkspace, { recursive: true });
+  fs.mkdirSync(sessionsDir, { recursive: true });
+
+  fs.writeFileSync(path.join(codexDir, '.codex-global-state.json'), JSON.stringify({
+    'electron-persisted-atom-state': {
+      'local-projects': {
+        [projectId]: { id: projectId, name: 'Assigned project', rootPaths: [project] },
+      },
+      'thread-project-assignments': {
+        'codex-sqlite-session': { projectKind: 'local', projectId, cwd: project },
+        'codex-jsonl-session': { projectKind: 'local', projectId, cwd: otherWorkspace },
+      },
+    },
+  }));
+  createCodexStateDb(codexDir, FULL_THREADS_SCHEMA, {
+    columns: [
+      'id', 'rollout_path', 'cwd', 'title', 'first_user_message', 'preview',
+      'archived', 'updated_at', 'updated_at_ms', 'recency_at_ms', 'thread_source', 'source',
+    ],
+    values: [
+      ['codex-sqlite-session', path.join(codexDir, 'sqlite.jsonl'), project, 'sqlite', 'sqlite prompt', '', 0, 0, 1778050000000, 1778050000000, 'user', 'appServer'],
+    ],
+  });
+  const jsonlPath = path.join(sessionsDir, 'codex-jsonl-session.jsonl');
+  fs.writeFileSync(jsonlPath, [
+    JSON.stringify({
+      type: 'session_meta',
+      payload: { id: 'codex-jsonl-session', cwd: otherWorkspace, source: 'appServer' },
+    }),
+    JSON.stringify({
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'jsonl prompt' },
+    }),
+  ].join('\n'));
+  fs.utimesSync(jsonlPath, new Date(1778070000000), new Date(1778070000000));
+
+  const sessions = collectCodexProjectSessions(homeDir, project, { projectId, limit: 10 });
+
+  assert.deepEqual(sessions.map(item => item.id), [
+    'codex-jsonl-session',
+    'codex-sqlite-session',
+  ]);
+});
+
+test('Codex JSONL listing treats project assignments as cwd overrides', () => {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-codex-project-overlay-jsonl-'));
+  const project = path.join(homeDir, 'code', 'overlay-project');
+  const otherWorkspace = path.join(homeDir, 'worktrees', 'overlay-project-task');
+  const codexDir = path.join(homeDir, '.codex');
+  const sessionsDir = path.join(codexDir, 'sessions', '2026', '07', '29');
+  const projectId = 'codex-project-overlay';
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(otherWorkspace, { recursive: true });
+  fs.mkdirSync(sessionsDir, { recursive: true });
+
+  fs.writeFileSync(path.join(codexDir, '.codex-global-state.json'), JSON.stringify({
+    'local-projects': {
+      [projectId]: { id: projectId, name: 'Overlay project', rootPaths: [project] },
+    },
+    'thread-project-assignments': {
+      'codex-assigned-jsonl': { projectKind: 'local', projectId, cwd: otherWorkspace },
+      'codex-other-project-jsonl': {
+        projectKind: 'local',
+        projectId: 'codex-project-other',
+        cwd: project,
+      },
+    },
+  }));
+
+  const writeSession = (id, cwd, updatedAt) => {
+    const filePath = path.join(sessionsDir, `${id}.jsonl`);
+    fs.writeFileSync(filePath, [
+      JSON.stringify({ type: 'session_meta', payload: { id, cwd, source: 'appServer' } }),
+      JSON.stringify({
+        type: 'event_msg',
+        payload: { type: 'user_message', message: `${id} prompt` },
+      }),
+    ].join('\n'));
+    fs.utimesSync(filePath, new Date(updatedAt), new Date(updatedAt));
+  };
+  writeSession('codex-assigned-jsonl', otherWorkspace, 1778070000000);
+  writeSession('codex-unassigned-jsonl', project, 1778065000000);
+  writeSession('codex-other-project-jsonl', project, 1778060000000);
+
+  const sessions = collectCodexProjectSessions(homeDir, project, {
+    projectId,
+    limit: 10,
+    scanLimit: 10,
+  });
+
+  assert.deepEqual(sessions.map(item => item.id), [
+    'codex-assigned-jsonl',
+    'codex-unassigned-jsonl',
+  ]);
 });
 
 test('Codex SQLite empty result does not fall back to scanning JSONL sessions', () => {

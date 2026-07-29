@@ -951,6 +951,15 @@ const directorySymlinkSupported = canCreateDirectorySymlink();
 {
   assert.deepStrictEqual(slashCommandInternals.parseSessionsArgs(''), { ok: true, limit: 5 });
   assert.deepStrictEqual(slashCommandInternals.parseSessionsArgs('10'), { ok: true, limit: 10 });
+  assert.deepStrictEqual(
+    slashCommandInternals.parseSessionsArgs('--project /code/app --project-id codex-project-app 10'),
+    {
+      ok: true,
+      limit: 10,
+      projectPath: '/code/app',
+      projectId: 'codex-project-app',
+    },
+  );
   assert.strictEqual(slashCommandInternals.parseSessionsArgs('--limit 10').ok, false);
   assert.strictEqual(slashCommandInternals.parseSessionsArgs('51').ok, false);
   assert.deepStrictEqual(slashCommandInternals.parseAgentArgs('--bind qa'), { mode: 'bind', agentId: 'qa' });
@@ -2199,6 +2208,21 @@ test('history-reload silently ends when the current turn is active', () => {
     { path: savedProject, label: path.basename(savedProject) },
   ]);
   assert.deepStrictEqual(candidates.slice(0, 2).map(item => item.projectId), [serviceProjectId, adminProjectId]);
+
+  const ws = createCaptureWs();
+  const session = {
+    id: 'session-codex-project-ids',
+    workspace: homeDir,
+    linco: { messageId: 'm-codex-project-ids', streamId: 'linco-stream-codex-project-ids' },
+    agentType: 'codex',
+    messageQueue: [],
+    agentSessionHistory: [],
+  };
+  assert.strictEqual(handleSlashCommand('/project', ws, session, { homeDir }), true);
+  assert.strictEqual(
+    ws.sent[0].data.items[0].sessionsCommand,
+    `/sessions --project ${serviceProject} --project-id ${serviceProjectId} 10`,
+  );
 }
 
 if (directorySymlinkSupported) {

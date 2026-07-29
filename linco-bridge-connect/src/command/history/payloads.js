@@ -57,7 +57,7 @@ function sanitizeCodexHistoryUserText(value) {
 
 function formatLocalProjectSessions(agentType, workspace, sessions, requestedLimit) {
   const lines = sessions.map((item, index) => {
-    const command = buildPcResumeCommand(agentType, workspace, item.id);
+    const command = buildPcResumeCommand(agentType, item.workspace || workspace, item.id);
     const title = truncateText(item.title || item.firstMessage || item.id, 80);
     return [
       `${index + 1}. ${title}`,
@@ -77,7 +77,8 @@ function buildSessionsPayload(agentType, workspace, sessions, actions, requested
     requestedLimit,
     returnedCount: sessions.length,
     items: sessions.map((item, index) => {
-      const resumeCommand = buildPcResumeCommand(agentType, workspace, item.id);
+      const sessionWorkspace = item.workspace || workspace;
+      const resumeCommand = buildPcResumeCommand(agentType, sessionWorkspace, item.id);
       return {
         index: index + 1,
         id: item.id,
@@ -87,6 +88,7 @@ function buildSessionsPayload(agentType, workspace, sessions, actions, requested
         updatedAt: item.updatedAt || 0,
         updatedAtText: formatDateTime(item.updatedAt),
         transcriptPath: item.transcriptPath || '',
+        workspace: sessionWorkspace,
         bindCommand: actions[index]?.command || `/bind ${quoteProjectPath(item.id)}`,
         resumeCommand,
       };
@@ -250,14 +252,15 @@ function buildHistoryPayload(agentType, sessionId, requestedLimit, rounds, optio
 
 function buildBindActions(sessions, workspace = '') {
   return sessions.map((item, index) => {
-    const command = workspace
-      ? `/bind --project ${quoteProjectPath(workspace)} ${quoteProjectPath(item.id)}`
+    const sessionWorkspace = workspace ? item.workspace || workspace : '';
+    const command = sessionWorkspace
+      ? `/bind --project ${quoteProjectPath(sessionWorkspace)} ${quoteProjectPath(item.id)}`
       : `/bind ${quoteProjectPath(item.id)}`;
     return projectAction(`Bind session ${index + 1}`, command, {
       action: 'bind',
       agentSessionId: item.id,
       sessionId: item.id,
-      path: workspace || undefined,
+      path: sessionWorkspace || undefined,
     });
   });
 }

@@ -43,6 +43,7 @@ function parseProjectSessionsArgs(trimmed) {
   if (!parsed.ok) return parsed;
 
   let projectPath = '';
+  let projectId = '';
   let limit = DEFAULT_LOCAL_SESSIONS_LIMIT;
   let sawLimit = false;
   for (let i = 0; i < parsed.args.length; i++) {
@@ -58,6 +59,17 @@ function parseProjectSessionsArgs(trimmed) {
       if (!projectPath) return { ok: false, message: '用法：/sessions --project <项目路径> [数量]。' };
       continue;
     }
+    if (arg === '--project-id') {
+      const next = parsed.args[++i];
+      if (!next) return { ok: false, message: '用法：/sessions --project <项目路径> [--project-id <项目ID>] [数量]。' };
+      projectId = next;
+      continue;
+    }
+    if (arg.startsWith('--project-id=')) {
+      projectId = arg.slice('--project-id='.length);
+      if (!projectId) return { ok: false, message: '用法：/sessions --project <项目路径> [--project-id <项目ID>] [数量]。' };
+      continue;
+    }
     if (/^\d+$/.test(arg) && !sawLimit) {
       limit = Number(arg);
       sawLimit = true;
@@ -69,7 +81,10 @@ function parseProjectSessionsArgs(trimmed) {
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_LOCAL_SESSIONS_LIMIT) {
     return { ok: false, message: `用法：/sessions --project <项目路径> [数量]，数量范围 1-${MAX_LOCAL_SESSIONS_LIMIT}。` };
   }
-  return { ok: true, limit, projectPath };
+  if (!projectPath) {
+    return { ok: false, message: '用法：/sessions --project <项目路径> [--project-id <项目ID>] [数量]。' };
+  }
+  return { ok: true, limit, projectPath, ...(projectId ? { projectId } : {}) };
 }
 
 function parseBindArgs(rawArg) {

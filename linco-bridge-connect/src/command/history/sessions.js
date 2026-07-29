@@ -52,9 +52,9 @@ function findClaudeTranscriptPath(workspace, sessionId, homeDir) {
   return { transcriptPath: '', expectedPath: expected };
 }
 
-function collectLocalProjectSessions({ agentType, workspace, homeDir, limit }) {
+function collectLocalProjectSessions({ agentType, workspace, homeDir, limit, projectId }) {
   const sessions = agentType === 'codex'
-    ? collectCodexProjectSessions(homeDir, workspace, { limit })
+    ? collectCodexProjectSessions(homeDir, workspace, { limit, projectId })
     : collectClaudeProjectSessions(homeDir, workspace, { limit });
   return sessions.sort(compareLocalSessions).slice(0, limit);
 }
@@ -123,21 +123,86 @@ function collectClaudeProjectSessions(homeDir, workspace, options = {}) {
 
 function collectCodexProjectSessions(homeDir, workspace, options = {}) {
   const codexDir = path.join(homeDir, '.codex');
-  const indexedSessions = collectCodexProjectSessionsFromState(codexDir, workspace, options);
-  if (indexedSessions) return indexedSessions;
-
   const index = readCodexSessionIndex(path.join(codexDir, 'session_index.jsonl'));
-  const scanLimit = options.scanLimit || DEFAULT_CODEX_SESSION_SCAN_LIMIT;
+  const assignment = readCodexProjectAssignment(codexDir, options.projectId);
+
+  const stateResult = collectCodexProjectSessionsFromState(
+    codexDir,
+    workspace,
+    index,
+    assignment,
+    options,
+  );
+  if (stateResult) {
+    if (!assignment) return stateResult.sessions;
+    const missingIds = assignment.threadIds.filter(id => !stateResult.foundIds.has(id));
+    if (missingIds.length === 0) return stateResult.sessions;
+    const missingSessions = collectCodexProjectSessionsFromJsonl(
+      codexDir,
+      workspace,
+      index,
+      {
+        ...assignment,
+        threadIds: missingIds,
+        includeUnassignedByWorkspace: false,
+      },
+      options,
+    );
+    return mergeCodexWorkspaceSessions(
+      [...stateResult.sessions, ...missingSessions],
+      normalizedSessionsLimit(options.limit),
+    );
+  }
+
+  return collectCodexProjectSessionsFromJsonl(
+    codexDir,
+    workspace,
+    index,
+    assignment,
+    options,
+  );
+}
+
+function collectCodexProjectSessionsFromJsonl(codexDir, workspace, index, assignment, options = {}) {
   const resultLimit = Number.isInteger(options.limit)
-    ? Math.max(1, Math.min(options.limit, MAX_LOCAL_SESSIONS_LIMIT))
+    ? normalizedSessionsLimit(options.limit)
     : 0;
+  const wantedIds = assignment ? new Set(assignment.threadIds) : null;
+  const includeUnassignedByWorkspace = !assignment || assignment.includeUnassignedByWorkspace !== false;
+  const sessionsDir = path.join(codexDir, 'sessions');
+  const filesByPath = new Map();
+  if (wantedIds && wantedIds.size > 0) {
+    for (const file of findCodexTranscriptFilesByIds(sessionsDir, wantedIds)) {
+      filesByPath.set(file.fullPath, file);
+    }
+  }
+  if (includeUnassignedByWorkspace) {
+    for (const file of safeReadFilesRecursive(sessionsDir, {
+      extension: '.jsonl',
+      limit: options.scanLimit || DEFAULT_CODEX_SESSION_SCAN_LIMIT,
+    })) {
+      filesByPath.set(file.fullPath, file);
+    }
+  }
+  const files = Array.from(filesByPath.values())
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   const workspaceKeys = workspaceMatchKeys(workspace);
   const matchedSessions = [];
 
-  for (const file of safeReadFilesRecursive(path.join(codexDir, 'sessions'), { extension: '.jsonl', limit: scanLimit })) {
+  for (const file of files) {
     const meta = readCodexSessionMeta(file.fullPath);
     if (isCodexSubagentSource('', meta.source)) continue;
-    if (!meta.id || !codexWorkspaceMatchesListingPath(meta.cwd, workspaceKeys)) continue;
+    if (!meta.id) continue;
+    if (assignment) {
+      const assignedProjectId = assignment.projectIdsByThreadId.get(meta.id);
+      if (assignedProjectId) {
+        if (assignedProjectId !== assignment.projectId || !wantedIds.has(meta.id)) continue;
+      } else if (!includeUnassignedByWorkspace || !codexWorkspaceMatchesListingPath(meta.cwd, workspaceKeys)) {
+        continue;
+      }
+    } else if (!codexWorkspaceMatchesListingPath(meta.cwd, workspaceKeys)) {
+      continue;
+    }
     const indexed = index.get(meta.id) || {};
     const item = {
       id: meta.id,
@@ -145,12 +210,17 @@ function collectCodexProjectSessions(homeDir, workspace, options = {}) {
       firstMessage: meta.firstMessage || '',
       updatedAt: parseTimeMs(indexed.updatedAt) || file.updatedAt,
       transcriptPath: file.fullPath,
+      workspace: meta.cwd || '',
     };
     matchedSessions.push(item);
-    if (resultLimit && matchedSessions.length >= resultLimit) break;
+    if (!assignment && resultLimit && matchedSessions.length >= resultLimit) break;
   }
 
   return mergeCodexWorkspaceSessions(matchedSessions, resultLimit);
+}
+
+function normalizedSessionsLimit(value) {
+  return Math.max(1, Math.min(value || DEFAULT_LOCAL_SESSIONS_LIMIT, MAX_LOCAL_SESSIONS_LIMIT));
 }
 
 function mergeCodexWorkspaceSessions(sessions, limit = 0) {
@@ -168,7 +238,7 @@ function mergeCodexWorkspaceSessions(sessions, limit = 0) {
   return limit > 0 ? merged.slice(0, limit) : merged;
 }
 
-function collectCodexProjectSessionsFromState(codexDir, workspace, options = {}) {
+function collectCodexProjectSessionsFromState(codexDir, workspace, index, assignment, options = {}) {
   const Database = loadBetterSqlite3();
   if (!Database) return null;
 
@@ -181,10 +251,35 @@ function collectCodexProjectSessionsFromState(codexDir, workspace, options = {})
     db.pragma('query_only = ON');
     if (!hasSqliteTable(db, 'threads')) return null;
 
-    const limit = Math.max(1, Math.min(options.limit || DEFAULT_LOCAL_SESSIONS_LIMIT, MAX_LOCAL_SESSIONS_LIMIT));
+    const limit = normalizedSessionsLimit(options.limit);
+    const columns = sqliteTableColumns(db, 'threads');
+    if (assignment) {
+      const assignedResult = collectAssignedCodexSessionsFromState(
+        db,
+        assignment.threadIds,
+        columns,
+        index,
+        limit,
+      );
+      const unassignedSessions = collectUnassignedCodexCwdSessionsFromState(
+        db,
+        workspace,
+        columns,
+        index,
+        assignment,
+        limit,
+      );
+      return {
+        sessions: mergeCodexWorkspaceSessions(
+          [...assignedResult.sessions, ...unassignedSessions],
+          limit,
+        ),
+        foundIds: assignedResult.foundIds,
+      };
+    }
+
     const cwdCandidates = sqliteCwdCandidates(workspace);
     const queryLimit = limit * Math.max(1, cwdCandidates.length);
-    const columns = sqliteTableColumns(db, 'threads');
     const visibilityPredicates = [];
     if (columns.has('thread_source')) {
       visibilityPredicates.push("COALESCE(thread_source, '') <> 'subagent'");
@@ -209,18 +304,20 @@ function collectCodexProjectSessionsFromState(codexDir, workspace, options = {})
     for (const row of rows) {
       const matchTier = codexWorkspaceMatchTier(row.cwd, workspaceKeys);
       if (!matchTier) continue;
+      const indexed = index.get(stringOrEmpty(row.id)) || {};
       const item = {
         id: stringOrEmpty(row.id),
-        title: normalizeCodexTitle(row.title) || normalizeCodexTitle(row.preview) || stringOrEmpty(row.id),
+        title: normalizeCodexTitle(indexed.threadName) || normalizeCodexTitle(row.title) || normalizeCodexTitle(row.preview) || stringOrEmpty(row.id),
         firstMessage: normalizeCodexTitle(row.first_user_message) || normalizeCodexTitle(row.preview) || '',
         updatedAt: sqliteTimeMs(row.recency_at_ms) || sqliteTimeMs(row.updated_at_ms) || sqliteTimeMs(row.updated_at),
         transcriptPath: stringOrEmpty(row.rollout_path),
+        workspace: stringOrEmpty(row.cwd),
       };
       matchedSessions.push(item);
     }
 
     const validSessions = mergeCodexWorkspaceSessions(matchedSessions, limit);
-    return validSessions;
+    return { sessions: validSessions, foundIds: new Set(rows.map(row => stringOrEmpty(row.id)).filter(Boolean)) };
   } catch {
     return null;
   } finally {
@@ -232,6 +329,167 @@ function collectCodexProjectSessionsFromState(codexDir, workspace, options = {})
       }
     }
   }
+}
+
+function collectAssignedCodexSessionsFromState(db, threadIds, columns, index, limit) {
+  const rows = [];
+  const foundIds = new Set();
+  const optionalColumns = [
+    columns.has('thread_source') ? 'thread_source' : "'' AS thread_source",
+    columns.has('source') ? 'source' : "'' AS source",
+  ];
+
+  for (let offset = 0; offset < threadIds.length; offset += 500) {
+    const batch = threadIds.slice(offset, offset + 500);
+    const batchRows = db.prepare(`
+      SELECT id, rollout_path, cwd, title, first_user_message, preview, archived,
+             recency_at_ms, updated_at_ms, updated_at, ${optionalColumns.join(', ')}
+      FROM threads
+      WHERE id IN (${batch.map(() => '?').join(', ')})
+    `).all(...batch);
+    rows.push(...batchRows);
+  }
+
+  const sessions = [];
+  for (const row of rows) {
+    const id = stringOrEmpty(row.id);
+    if (!id) continue;
+    foundIds.add(id);
+    if (Number(row.archived) !== 0 || isCodexSubagentSource(row.thread_source, row.source)) continue;
+    const indexed = index.get(id) || {};
+    sessions.push({
+      id,
+      title: normalizeCodexTitle(indexed.threadName) || normalizeCodexTitle(row.title) || normalizeCodexTitle(row.preview) || id,
+      firstMessage: normalizeCodexTitle(row.first_user_message) || normalizeCodexTitle(row.preview) || '',
+      updatedAt: sqliteTimeMs(row.recency_at_ms) || sqliteTimeMs(row.updated_at_ms) || sqliteTimeMs(row.updated_at),
+      transcriptPath: stringOrEmpty(row.rollout_path),
+      workspace: stringOrEmpty(row.cwd),
+    });
+  }
+  return { sessions: mergeCodexWorkspaceSessions(sessions, limit), foundIds };
+}
+
+function collectUnassignedCodexCwdSessionsFromState(
+  db,
+  workspace,
+  columns,
+  index,
+  assignment,
+  limit,
+) {
+  const cwdCandidates = sqliteCwdCandidates(workspace);
+  const visibilityPredicates = [];
+  if (columns.has('thread_source')) {
+    visibilityPredicates.push("COALESCE(thread_source, '') <> 'subagent'");
+  }
+  if (columns.has('source')) {
+    visibilityPredicates.push("COALESCE(source, '') NOT LIKE '%\"subagent\"%'");
+  }
+  const visibilitySql = visibilityPredicates.length > 0
+    ? ` AND ${visibilityPredicates.join(' AND ')}`
+    : '';
+  const rows = db.prepare(`
+    SELECT id, rollout_path, cwd, title, first_user_message, preview,
+           recency_at_ms, updated_at_ms, updated_at
+    FROM threads
+    WHERE archived = 0 AND cwd IN (${cwdCandidates.map(() => '?').join(', ')})${visibilitySql}
+    ORDER BY recency_at_ms DESC, updated_at_ms DESC, updated_at DESC, id DESC
+  `).all(...cwdCandidates);
+  const workspaceKeys = workspaceMatchKeys(workspace);
+  const sessions = [];
+
+  for (const row of rows) {
+    const id = stringOrEmpty(row.id);
+    if (!id || assignment.projectIdsByThreadId.has(id)) continue;
+    if (!codexWorkspaceMatchTier(row.cwd, workspaceKeys)) continue;
+    const indexed = index.get(id) || {};
+    sessions.push({
+      id,
+      title: normalizeCodexTitle(indexed.threadName) || normalizeCodexTitle(row.title) || normalizeCodexTitle(row.preview) || id,
+      firstMessage: normalizeCodexTitle(row.first_user_message) || normalizeCodexTitle(row.preview) || '',
+      updatedAt: sqliteTimeMs(row.recency_at_ms) || sqliteTimeMs(row.updated_at_ms) || sqliteTimeMs(row.updated_at),
+      transcriptPath: stringOrEmpty(row.rollout_path),
+      workspace: stringOrEmpty(row.cwd),
+    });
+  }
+  return mergeCodexWorkspaceSessions(sessions, limit);
+}
+
+function readCodexProjectAssignment(codexDir, projectId) {
+  const targetProjectId = stringOrEmpty(projectId);
+  if (!targetProjectId) return null;
+  const state = readJsonFile(path.join(codexDir, '.codex-global-state.json'));
+  if (!state) return null;
+
+  const knownProject = collectObjectsAtKey(state, 'local-projects').some(projects =>
+    Object.entries(projects).some(([fallbackId, project]) =>
+      stringOrEmpty(project?.id) === targetProjectId || stringOrEmpty(fallbackId) === targetProjectId
+    )
+  );
+  if (!knownProject) return null;
+
+  const assignmentMaps = collectObjectsAtKey(state, 'thread-project-assignments');
+  if (assignmentMaps.length === 0) return null;
+  const threadIds = [];
+  const seen = new Set();
+  const projectIdsByThreadId = new Map();
+  for (const assignments of assignmentMaps) {
+    for (const [threadId, assignment] of Object.entries(assignments)) {
+      const id = stringOrEmpty(threadId);
+      const assignedProjectId = stringOrEmpty(assignment?.projectId);
+      if (!id || !assignedProjectId) continue;
+      if (!projectIdsByThreadId.has(id)) projectIdsByThreadId.set(id, assignedProjectId);
+      if (seen.has(id) || assignedProjectId !== targetProjectId) continue;
+      const projectKind = stringOrEmpty(assignment?.projectKind);
+      if (projectKind && projectKind !== 'local') continue;
+      seen.add(id);
+      threadIds.push(id);
+    }
+  }
+  return {
+    projectId: targetProjectId,
+    threadIds,
+    projectIdsByThreadId,
+    includeUnassignedByWorkspace: true,
+  };
+}
+
+function collectObjectsAtKey(value, targetKey, result = []) {
+  if (!value || typeof value !== 'object') return result;
+  if (Array.isArray(value)) {
+    for (const item of value) collectObjectsAtKey(item, targetKey, result);
+    return result;
+  }
+  for (const [key, item] of Object.entries(value)) {
+    if (key === targetKey && item && typeof item === 'object' && !Array.isArray(item)) {
+      result.push(item);
+      continue;
+    }
+    collectObjectsAtKey(item, targetKey, result);
+  }
+  return result;
+}
+
+function findCodexTranscriptFilesByIds(sessionsDir, wantedIds) {
+  if (!isReadableDirectory(sessionsDir) || wantedIds.size === 0) return [];
+  const files = [];
+  const stack = [sessionsDir];
+  const wantedIdList = Array.from(wantedIds);
+  while (stack.length > 0) {
+    const current = stack.pop();
+    for (const entry of safeReadDir(current, { withFileTypes: true })) {
+      const fullPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
+      const stem = entry.name.slice(0, -'.jsonl'.length);
+      const matches = wantedIds.has(stem) || wantedIdList.some(id => stem.endsWith(`-${id}`));
+      if (matches) files.push({ fullPath, updatedAt: safeMtimeMs(fullPath) });
+    }
+  }
+  return files.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
 function loadBetterSqlite3() {

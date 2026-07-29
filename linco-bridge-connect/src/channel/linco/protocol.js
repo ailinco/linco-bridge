@@ -9,6 +9,9 @@ const {
   pruneUndefined,
 } = require("../../package/protocol");
 
+const HISTORY_RESULT_SINGLE_FRAME_MAX_BYTES = 256 * 1024;
+const HISTORY_RESULT_CHUNK_BASE64_CHARS = 128 * 1024;
+
 function toInternal(msg) {
   if (msg.type === "inbound_message") {
     return {
@@ -52,11 +55,13 @@ function createLincoAdapter(rawWs, session, config) {
       }
       const payload = mapLocalEventToLinco(event, session, config, linco);
       if (!payload || closed.current) return;
-      const wrapped = wrapLincoEnvelope(payload, config, session);
-      if (Array.isArray(wrapped)) {
-        for (const item of wrapped) rawWs.send(JSON.stringify(item));
+      if (Array.isArray(payload)) {
+        for (const item of payload) {
+          rawWs.send(JSON.stringify(wrapLincoEnvelope(item, config, session)));
+        }
         return;
       }
+      const wrapped = wrapLincoEnvelope(payload, config, session);
       rawWs.send(JSON.stringify(wrapped));
     },
     rawSend(data) {
@@ -255,8 +260,8 @@ function mapLocalEventToLinco(event, session, config, linco) {
         quickActions: event.quickActions,
         quickReplies: event.quickReplies,
       };
-    case "slash_command_result":
-      return {
+    case "slash_command_result": {
+      const result = {
         ...base,
         ...event,
         type: "slash_command_result",
@@ -264,6 +269,8 @@ function mapLocalEventToLinco(event, session, config, linco) {
         streamId: event.streamId || event.stream_id || linco.streamId || base.streamId,
         sessionKey: event.sessionKey || event.session_key || session.id,
       };
+      return chunkLargeHistoryResult(result);
+    }
     case "turn_end":
       return {
         ...base,
@@ -295,6 +302,32 @@ function mapLocalEventToLinco(event, session, config, linco) {
         type: event.type || "outbound_message",
       });
   }
+}
+
+function chunkLargeHistoryResult(result) {
+  if (result.command !== "history") return result;
+  const payloadJson = JSON.stringify(result.data ?? null);
+  const payloadBytes = Buffer.byteLength(payloadJson, "utf8");
+  if (payloadBytes <= HISTORY_RESULT_SINGLE_FRAME_MAX_BYTES) return result;
+
+  const encoded = Buffer.from(payloadJson, "utf8").toString("base64");
+  const chunkCount = Math.ceil(
+    encoded.length / HISTORY_RESULT_CHUNK_BASE64_CHARS,
+  );
+  return Array.from({ length: chunkCount }, (_, chunkIndex) => ({
+    ...result,
+    type: "slash_command_result_chunk",
+    messageId: `${result.messageId || result.requestId}:history-chunk:${chunkIndex}`,
+    encoding: "base64",
+    chunkIndex,
+    chunkCount,
+    payloadBytes,
+    chunkData: encoded.slice(
+      chunkIndex * HISTORY_RESULT_CHUNK_BASE64_CHARS,
+      (chunkIndex + 1) * HISTORY_RESULT_CHUNK_BASE64_CHARS,
+    ),
+    data: undefined,
+  }));
 }
 
 function withLincoOutboundFiles(payload) {

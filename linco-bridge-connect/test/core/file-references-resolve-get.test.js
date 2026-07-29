@@ -2,7 +2,11 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { resolveGetTarget, validateGetFile } = require('../../src/core/fileReferences');
+const {
+  mimeFromFilename,
+  resolveGetTarget,
+  validateGetFile,
+} = require('../../src/core/fileReferences');
 
 function baseConfig() {
   return {
@@ -26,6 +30,8 @@ const session = {
 };
 
 try {
+  assert.strictEqual(mimeFromFilename('contract.vue'), 'text/plain; charset=utf-8');
+
   fs.mkdirSync(session.workspace, { recursive: true });
   fs.mkdirSync(session.runtimeDir, { recursive: true });
   fs.mkdirSync(session.attachmentsDir, { recursive: true });

@@ -153,4 +153,71 @@ const handleAppServerMessage = loadCodexHandler();
   );
 }
 
+{
+  const { session, sent } = createRemoteSession();
+  const prefix =
+    '明白，我刚才把本机排查记录和用户现场混在了一起。' +
+    '不能据此断定该用户是插件休眠后尚未 OPEN。\n\n' +
+    '对于该用户，只能确认页面在线不代表本次同步链路完整可用。';
+  const suffix = '\n\n不能简单归因于“插件还没 open”。';
+  const finalText = `${prefix}${suffix}`;
+  const itemId = 'agent-final-phase-arrives-on-last-delta';
+
+  handleAppServerMessage({
+    method: 'item/started',
+    params: {
+      item: {
+        type: 'agentMessage',
+        id: itemId,
+        phase: 'final_answer',
+        text: '',
+      },
+    },
+  }, session);
+  handleAppServerMessage({
+    method: 'item/agentMessage/delta',
+    params: {
+      itemId,
+      delta: prefix,
+    },
+  }, session);
+  handleAppServerMessage({
+    method: 'item/agentMessage/delta',
+    params: {
+      itemId,
+      phase: 'final_answer',
+      delta: suffix,
+    },
+  }, session);
+  handleAppServerMessage({
+    method: 'item/completed',
+    params: {
+      item: {
+        type: 'agentMessage',
+        id: itemId,
+        phase: 'final_answer',
+        text: finalText,
+      },
+    },
+  }, session);
+  handleAppServerMessage({ method: 'turn/completed', params: {} }, session);
+
+  const streamedText = sent
+    .filter(event => event.type === 'assistant_chunk')
+    .map(event => event.text)
+    .join('');
+  const linco = { streamId: 'linco-stream-late-final-phase' };
+  const chunks = sent
+    .map(event => mapLocalEventToLinco(event, session, {}, linco))
+    .filter(event => event?.type === 'stream_chunk');
+  const finalChunk = chunks.filter(event => event.done === false).at(-1);
+  const done = chunks.find(event => event.done === true);
+
+  assert.strictEqual(streamedText, finalText);
+  assert(finalChunk);
+  assert.strictEqual(finalChunk.fullText, finalText);
+  assert(done);
+  assert.strictEqual(done.fullText, finalText);
+}
+
 console.log('codex final phase correction ok');

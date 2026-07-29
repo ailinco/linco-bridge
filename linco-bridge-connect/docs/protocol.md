@@ -84,6 +84,7 @@
 | `danger_warning` | 请求用户确认危险操作。 |
 | `outbound_message` | 普通系统消息、错误消息、文件下发或非流式回复。 |
 | `slash_command_result` | 本地斜杠命令的结构化结果。 |
+| `slash_command_result_chunk` | 超大历史结果的分片；远端 IM 重组后按 `slash_command_result` 处理。 |
 | `agent_session` | Agent 原生会话已建立或恢复。 |
 | `context_compaction` | 上下文整理进度。 |
 | `turn_end` | 当前回合结束。 |
@@ -142,6 +143,15 @@
 `thinking` 字段，用于展示该回合模型过程输出；未带参数时历史 payload
 保持原结构。工具输出不会进入 `thinking`。
 
+当 history 的 `data` 序列化后超过 256 KiB，连接器不会发送单个超大
+`slash_command_result`，而是按顺序发送 `slash_command_result_chunk`。每个分片
+保留相同的 `requestId`、`streamId`、`sessionKey` 和 `command: "history"`，并提供
+`encoding: "base64"`、`chunkIndex`、`chunkCount`、`payloadBytes`、`chunkData`。
+远端 IM 必须按 `chunkIndex` 重组全部 `chunkData`，Base64 解码并校验字节数，
+再把 JSON 解析结果作为原 `data` 处理；在分片缺失或校验失败时应结束请求并
+返回明确错误，不能继续等待到通用超时。小于等于阈值的 history 仍使用原
+`slash_command_result`，兼容旧链路。
+
 ## 权限与危险操作
 
 Agent 适配器可能发送 `permission_request` 或 `danger_warning`。远端 IM 应让用户明确确认，然后回传：
@@ -167,7 +177,7 @@ Agent 适配器可能发送 `permission_request` 或 `danger_warning`。远端 I
 
 Agent 生成文件时通常先在回复中返回文件路径引用。Agent 可见提示词只要求返回 `[filename.ext](absolute-local-path)` 这类 Markdown 绝对路径引用，不暴露 `/get` 命令或下发实现细节。远端 IM 点击引用后可以发送 `/get <路径>`，连接器校验路径、文件类型和大小后返回 `outbound_message`，其中包含 `mediaBase64` 或 `files`。
 
-连接器只应下发当前工作目录、会话运行目录或附件目录内的普通非隐藏文件，默认拒绝 `.env`、`.git/config`、`.ssh/*` 等隐藏路径。
+连接器只应下发当前工作目录、`/project` 当前列出的项目、会话运行目录或附件目录内的普通非隐藏文件。相对路径保持当前会话目录语义，绝对路径按真实路径校验归属并拒绝软链接逃逸；默认拒绝 `.env`、`.git/config`、`.ssh/*` 等隐藏路径。
 
 ## 内部元数据
 

@@ -17,7 +17,7 @@
 | `/remove-account` / `/delete-account` | 删除当前或指定 Agent 下的账号配置。 |
 | `/accounts --channel <channel>` | 列出指定 channel 下已配置的账号 ID。 |
 | `/base` | 显示 Linco 运行目录、会话运行目录和附件目录。 |
-| `/get <路径>` | 读取允许目录内的非隐藏文件并返回给远端 IM。 |
+| `/get <路径>` | 读取当前工作目录、`/project` 项目、运行目录或附件目录内的非隐藏文件并返回给远端 IM；相对路径仍以当前会话目录为准。 |
 | `/approve` | 显示当前审批模式。 |
 | `/approve manual` | 后续权限请求和危险操作由用户手动确认。 |
 | `/approve auto` | 自动确认权限请求和危险操作，保留默认权限边界。 |
@@ -37,7 +37,7 @@
 | `/cd <路径>` | 将指定目录绑定为当前项目并开启新 Agent 会话。 |
 | `/project` | 从本地记录中列出已知项目，远端 IM 可渲染按钮选择。 |
 | `/project --select <路径>` | 选择项目并开启新 Agent 会话。 |
-| `/sessions [limit]` | 列出当前项目最近的本地 Agent sessions。 |
+| `/sessions [--project <路径>] [--project-id <项目ID>] [limit]` | 列出当前项目最近的本地 Agent sessions；Codex 项目 ID 用于合并显式归属会话与未改派的同目录会话，并排除已归到其他项目的会话。 |
 | `/bind <Session ID>` | 将未绑定的 IM 会话绑定到当前项目内已有 Agent session。 |
 | `/history [limit]` | 显示当前已绑定 Agent session 的最近聊天内容，默认 10 轮。 |
 | `/history-reload [limit]` / `/sync-history [limit]` | 先刷新本地 Agent 记忆，再重新加载历史。 |
@@ -104,3 +104,5 @@ Codex 额外支持：
 | `update` | 当前版本、可升级版本或升级状态。 |
 
 所有本地命令回合都应以 `turn_end` 结束。前端收到 `turn_end` 后应停止当前输入的 running 状态。
+超大 `history` 结果会先以多个 `slash_command_result_chunk` 分片发送；远端必须在
+`turn_end` 前完成 Base64 重组与字节校验，再按普通 `slash_command_result` 处理。

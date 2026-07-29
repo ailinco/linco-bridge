@@ -56,6 +56,18 @@ function projectPathLabelKeys(projectPath) {
   return [...new Set(keys)];
 }
 
+function projectNameKey(value) {
+  return stringOrEmpty(value)
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\s_-]+/gu, '');
+}
+
+function candidateLabelMatchesPath(candidate, projectPath) {
+  const labelKey = projectNameKey(candidate.label || candidate.name);
+  return Boolean(labelKey) && labelKey === projectNameKey(path.basename(projectPath));
+}
+
 function workspaceRootLabel(labels, projectPath) {
   for (const key of projectPathLabelKeys(projectPath)) {
     const label = labels.get(key);
@@ -157,23 +169,29 @@ function buildProjectsPayload(agentType, currentWorkspace, projects, actions) {
     version: 1,
     agentType,
     currentWorkspace: currentWorkspace ? path.resolve(currentWorkspace) : '',
-    items: projects.map((project, index) => ({
-      index: index + 1,
-      label: project.label,
-      name: project.label,
-      path: project.path,
-      displayPath: project.displayPath || project.path,
-      parentPath: project.parentPath || path.dirname(project.path),
-      basename: project.basename || path.basename(project.path),
-      projectId: project.projectId || projectIdentity(agentType, project.path),
-      project_id: project.projectId || projectIdentity(agentType, project.path),
-      projectKey: project.projectKey || project.projectId || projectIdentity(agentType, project.path),
-      project_key: project.projectKey || project.projectId || projectIdentity(agentType, project.path),
-      canonicalPath: project.canonicalPath || '',
-      source: project.source || '',
-      command: actions[index]?.command || `/project --select ${quoteProjectPath(project.path)}`,
-      sessionsCommand: `/sessions --project ${quoteProjectPath(project.path)}`,
-    })),
+    items: projects.map((project, index) => {
+      const projectId = project.projectId || projectIdentity(agentType, project.path);
+      const sessionsCommand = agentType === 'codex'
+        ? `/sessions --project ${quoteProjectPath(project.path)} --project-id ${quoteProjectPath(projectId)} 10`
+        : `/sessions --project ${quoteProjectPath(project.path)}`;
+      return {
+        index: index + 1,
+        label: project.label,
+        name: project.label,
+        path: project.path,
+        displayPath: project.displayPath || project.path,
+        parentPath: project.parentPath || path.dirname(project.path),
+        basename: project.basename || path.basename(project.path),
+        projectId,
+        project_id: projectId,
+        projectKey: project.projectKey || projectId,
+        project_key: project.projectKey || projectId,
+        canonicalPath: project.canonicalPath || '',
+        source: project.source || '',
+        command: actions[index]?.command || `/project --select ${quoteProjectPath(project.path)}`,
+        sessionsCommand,
+      };
+    }),
   };
 }
 
@@ -317,7 +335,7 @@ function collectCodexSessionProjects(homeDir) {
 }
 
 function normalizeKnownProjectCandidates(candidates, homeDir, agentType = 'agent') {
-  const seen = new Set();
+  const seen = new Map();
   const result = [];
   for (const candidate of candidates) {
     if (!candidate?.path || typeof candidate.path !== 'string') continue;
@@ -325,20 +343,18 @@ function normalizeKnownProjectCandidates(candidates, homeDir, agentType = 'agent
     const resolved = path.resolve(candidate.path);
     const canonical = canonicalProjectPath(resolved);
     const key = normalizePathKey(resolved);
-    if (seen.has(key)) continue;
     if (!isReadableDirectory(resolved)) continue;
     if (!isSelectableProjectDirectory(canonical)) continue;
     if (isLincoRuntimeWorkspace(canonical, homeDir)) continue;
     if (isUnsafeKnownProjectPath(canonical, homeDir)) continue;
-    seen.add(key);
     const label = stringOrEmpty(candidate.label) || path.basename(resolved) || resolved;
-    const projectId = stringOrEmpty(candidate.projectId) ||
+    const explicitProjectId = stringOrEmpty(candidate.projectId) ||
       stringOrEmpty(candidate.project_id) ||
       stringOrEmpty(candidate.projectKey) ||
-      stringOrEmpty(candidate.project_key) ||
-      projectIdentity(agentType, resolved);
+      stringOrEmpty(candidate.project_key);
+    const projectId = explicitProjectId || projectIdentity(agentType, resolved);
     const canonicalPath = normalizePathKey(canonical) === normalizePathKey(resolved) ? '' : canonical;
-    result.push({
+    const normalizedCandidate = {
       ...candidate,
       path: resolved,
       label,
@@ -351,7 +367,27 @@ function normalizeKnownProjectCandidates(candidates, homeDir, agentType = 'agent
       projectKey: projectId,
       project_key: projectId,
       canonicalPath,
-    });
+    };
+    const ownership = {
+      index: result.length,
+      hasExplicitProjectId: Boolean(explicitProjectId),
+      labelMatchesPath: candidateLabelMatchesPath(normalizedCandidate, resolved),
+    };
+    const existing = seen.get(key);
+    if (existing) {
+      const shouldReplace =
+        (ownership.hasExplicitProjectId && !existing.hasExplicitProjectId) ||
+        (ownership.hasExplicitProjectId === existing.hasExplicitProjectId &&
+          ownership.labelMatchesPath &&
+          !existing.labelMatchesPath);
+      if (shouldReplace) {
+        result[existing.index] = normalizedCandidate;
+        seen.set(key, { ...ownership, index: existing.index });
+      }
+      continue;
+    }
+    seen.set(key, ownership);
+    result.push(normalizedCandidate);
   }
   return result;
 }

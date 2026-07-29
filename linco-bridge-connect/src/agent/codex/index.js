@@ -103,6 +103,7 @@ function runAppServerTurn(input, ws, session, config) {
   session.sawPartialAssistantText = false;
   session.codexAssistantEnded = false;
   session.codexUseProgressiveAnswer = true;
+  session.codexAgentMessageDeclaredPhases = new Map();
   session.codexAgentMessageEmissionPhases = new Map();
   session.codexToolStates = new Map();
   resetCodexAssistantText(session);
@@ -701,6 +702,7 @@ function sendCodexCompactCommand(ws, session, config, options = {}) {
   session.sawPartialAssistantText = false;
   session.codexAssistantEnded = false;
   session.codexUseProgressiveAnswer = false;
+  session.codexAgentMessageDeclaredPhases = new Map();
   session.codexAgentMessageEmissionPhases = new Map();
   session.codexToolStates = new Map();
   resetCodexAssistantText(session);
@@ -1230,6 +1232,28 @@ function rememberCodexAssistantText(session, text) {
 
 function codexAgentMessageId(params) {
   return String(params.item?.id || params.itemId || params.id || '').trim();
+}
+
+function ensureCodexAgentMessageDeclaredPhases(session) {
+  if (!(session.codexAgentMessageDeclaredPhases instanceof Map)) {
+    session.codexAgentMessageDeclaredPhases = new Map();
+  }
+  return session.codexAgentMessageDeclaredPhases;
+}
+
+function rememberCodexAgentMessageDeclaredPhase(session, params) {
+  const itemId = codexAgentMessageId(params);
+  const phase = String(params.item?.phase || params.phase || '').trim();
+  if (!itemId || !phase) return;
+  ensureCodexAgentMessageDeclaredPhases(session).set(itemId, phase);
+}
+
+function codexAgentMessagePhase(session, params) {
+  const explicit = String(params.item?.phase || params.phase || '').trim();
+  if (explicit) return explicit;
+  const itemId = codexAgentMessageId(params);
+  if (!itemId) return '';
+  return ensureCodexAgentMessageDeclaredPhases(session).get(itemId) || '';
 }
 
 function ensureCodexAgentMessageEmissionPhases(session) {
@@ -1803,7 +1827,7 @@ function handleAppServerMessage(message, session) {
     const delta = params.delta || '';
     if (delta) {
       const itemType = params.item?.type || params.type || '';
-      const phase = String(params.item?.phase || params.phase || '').trim();
+      const phase = codexAgentMessagePhase(session, params);
       if (isRemoteCodexSession(session, ws) && isCodexAssistantMessageType(itemType) && phase !== 'final_answer') {
         if (shouldEmitCodexProgress(session, ws)) {
           appendCodexProgressAssistantText(delta, ws, session);
@@ -1943,6 +1967,9 @@ function handleAppServerMessage(message, session) {
   if (method === 'item/started') {
     const itemType = params.item?.type || '';
     session._log?.info('codex item started', { itemType, item: summarizeCodexItemForLog(params.item) });
+    if (isCodexAssistantMessageType(itemType)) {
+      rememberCodexAgentMessageDeclaredPhase(session, params);
+    }
     if (isCodexContextCompactionItem(itemType)) {
       handleCodexCompactionStarted(params, session);
       return;

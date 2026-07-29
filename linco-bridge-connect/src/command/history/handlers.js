@@ -63,6 +63,7 @@ function handleSessions(rawArg, ws, session, options = {}) {
     workspace,
     homeDir: options.homeDir || os.homedir(),
     limit: parsed.limit,
+    projectId: parsed.projectId,
   });
 
   if (sessions.length === 0) {
