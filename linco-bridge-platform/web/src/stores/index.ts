@@ -11,9 +11,19 @@ import {
 } from '@/api/session-api'
 import type { BridgeSdk } from '@/bridge/sdk/types'
 import type { AgentBridgeSetup, AgentBridgeType, BridgeStatusResult } from '@/bridge/types'
-import type { AgentTrace, ChatMessage, ChatMessageAttachment, ChatSessionItem } from '@/bridge/types'
+import type {
+  AgentTrace,
+  ChatMessage,
+  ChatMessageAttachment,
+  ChatSessionItem,
+} from '@/bridge/types'
 import { sanitizeBridgeAssistantContent } from '@/utils/bridge-message-sanitize'
 import { mapOutboundFilesToAttachments } from '@/utils/chat-attachments'
+import {
+  mergeMessageAttachments,
+  mergeStreamErrorContent,
+  reconcileAssistantMessage,
+} from '@/utils/chat-message-reconcile'
 
 const STREAMING_ASSISTANT_ID_PREFIX = 'stream-assistant-'
 
@@ -100,10 +110,7 @@ export const useSessionStore = defineStore('session', () => {
     messagesBySession.value = nextMessages
   }
 
-  async function loadMessages(
-    sessionId: string,
-    options?: { limit?: number; reload?: boolean },
-  ) {
+  async function loadMessages(sessionId: string, options?: { limit?: number; reload?: boolean }) {
     loadingMessages.value = {
       ...loadingMessages.value,
       [sessionId]: true,
@@ -163,26 +170,30 @@ export const useSessionStore = defineStore('session', () => {
     message: ChatMessage,
   ) {
     const current = messagesBySession.value[sessionId] ?? []
-    const existing = current.find((item) => item.id === placeholderId)
-    const withoutPlaceholder = current.filter((item) => item.id !== placeholderId)
+    const placeholderIndex = current.findIndex((item) => item.id === placeholderId)
+    const synchronizedIndex = current.findIndex(
+      (item) => item.id === message.id && item.id !== placeholderId,
+    )
+    const placeholder = placeholderIndex >= 0 ? current[placeholderIndex] : undefined
+    const synchronized = synchronizedIndex >= 0 ? current[synchronizedIndex] : undefined
+    const sourceIndex =
+      placeholderIndex >= 0
+        ? placeholderIndex
+        : synchronizedIndex >= 0
+          ? synchronizedIndex
+          : current.length
+    const insertionIndex = current
+      .slice(0, sourceIndex)
+      .filter((item) => item.id !== placeholderId && item.id !== message.id).length
+    const next = current.filter((item) => item.id !== placeholderId && item.id !== message.id)
+    next.splice(
+      Math.min(insertionIndex, next.length),
+      0,
+      reconcileAssistantMessage({ placeholder, synchronized, final: message }),
+    )
     messagesBySession.value = {
       ...messagesBySession.value,
-      [sessionId]: [
-        ...withoutPlaceholder,
-        {
-          ...message,
-          streaming: false,
-          reasoningStreaming: false,
-          attachments: message.attachments ?? existing?.attachments,
-          reasoning: existing?.reasoning
-            ? {
-                ...existing.reasoning,
-                endedAt: existing.reasoning.endedAt ?? Date.now(),
-              }
-            : undefined,
-          agentTrace: message.agentTrace ?? existing?.agentTrace,
-        },
-      ],
+      [sessionId]: next,
     }
   }
 
@@ -195,6 +206,7 @@ export const useSessionStore = defineStore('session', () => {
       reasoning?: ChatMessage['reasoning'] | null
       reasoningStreaming?: boolean
       agentTrace?: AgentTrace | null
+      streaming?: boolean
     },
   ) {
     const current = messagesBySession.value[sessionId] ?? []
@@ -218,7 +230,7 @@ export const useSessionStore = defineStore('session', () => {
       role: 'assistant',
       content: patch.content ?? existing?.content ?? '',
       createdAt: existing?.createdAt ?? Date.now(),
-      streaming: true,
+      streaming: patch.streaming ?? existing?.streaming ?? true,
       attachments: patch.attachments ?? existing?.attachments,
       reasoning: nextReasoning,
       reasoningStreaming: patch.reasoningStreaming ?? existing?.reasoningStreaming,
@@ -249,7 +261,31 @@ export const useSessionStore = defineStore('session', () => {
     const outboundFiles = options?.files ?? []
     const optimisticAttachments = mapOutboundFilesToAttachments(outboundFiles)
     let assistantStarted = false
+    let finalPhaseStarted = false
+    let streamError = ''
     const reasoningStartedAt = Date.now()
+
+    const finalizeStreamError = (message: string) => {
+      const normalized = message.trim() || 'stream error'
+      if (!assistantStarted) {
+        assistantStarted = true
+        patchStreamingAssistant(sessionId, assistantPlaceholderId, { content: '' })
+      }
+      const current = messagesBySession.value[sessionId] ?? []
+      const existing = current.find((item) => item.id === assistantPlaceholderId)
+      streamError = normalized
+      patchStreamingAssistant(sessionId, assistantPlaceholderId, {
+        content: mergeStreamErrorContent(existing?.content ?? '', normalized),
+        streaming: false,
+        reasoningStreaming: false,
+        reasoning: existing?.reasoning
+          ? {
+              ...existing.reasoning,
+              endedAt: existing.reasoning.endedAt ?? Date.now(),
+            }
+          : undefined,
+      })
+    }
 
     if (trimmed || optimisticAttachments.length > 0) {
       upsertMessage(sessionId, {
@@ -262,7 +298,7 @@ export const useSessionStore = defineStore('session', () => {
       })
     }
 
-    const reply = await streamSessionMessage(
+    const replyPromise = streamSessionMessage(
       sessionId,
       content,
       {
@@ -276,8 +312,10 @@ export const useSessionStore = defineStore('session', () => {
         onUserMessage: (message) => {
           const current = messagesBySession.value[sessionId] ?? []
           const optimistic = current.find((item) => item.id === optimisticUserId)
+          const synchronized = current.find((item) => item.id === message.id)
           // 服务端不回传 data: 预览，保留乐观更新里的本地缩略图
           const mergedMessage: ChatMessage = {
+            ...synchronized,
             ...message,
             attachments:
               message.attachments?.map((att, index) => ({
@@ -286,7 +324,9 @@ export const useSessionStore = defineStore('session', () => {
                   att.previewUrl || optimistic?.attachments?.[index]?.previewUrl || undefined,
               })) ?? optimistic?.attachments,
           }
-          const withoutOptimistic = current.filter((item) => item.id !== optimisticUserId)
+          const withoutOptimistic = current.filter(
+            (item) => item.id !== optimisticUserId && item.id !== message.id,
+          )
           // 阻塞发送可能先 onStart 再 onUser：用户消息必须插在「输出中」占位之前
           const streamingIdx = withoutOptimistic.findIndex(
             (item) => item.id === assistantPlaceholderId,
@@ -342,16 +382,15 @@ export const useSessionStore = defineStore('session', () => {
           }
           patchStreamingAssistant(sessionId, assistantPlaceholderId, { agentTrace: trace })
         },
-        onChunk: ({ fullText, phase, ephemeral, replacePrevious }) => {
+        onChunk: ({ fullText, phase, ephemeral }) => {
+          if (streamError) return
           const isEphemeral = ephemeral === true || phase === 'progress'
           if (!assistantStarted) {
             assistantStarted = true
-            patchStreamingAssistant(sessionId, assistantPlaceholderId, { content: fullText })
-            return
-          }
-          if (!isEphemeral && replacePrevious) {
             patchStreamingAssistant(sessionId, assistantPlaceholderId, { content: '' })
           }
+          if (isEphemeral && finalPhaseStarted) return
+          if (!isEphemeral) finalPhaseStarted = true
           patchStreamingAssistant(sessionId, assistantPlaceholderId, { content: fullText })
         },
         onAttachment: (attachment) => {
@@ -365,9 +404,10 @@ export const useSessionStore = defineStore('session', () => {
           }
           const current = messagesBySession.value[sessionId] ?? []
           const existing = current.find((item) => item.id === assistantPlaceholderId)
-          const attachments = [...(existing?.attachments ?? []), attachment]
+          const attachments = mergeMessageAttachments(existing?.attachments, [attachment])
           patchStreamingAssistant(sessionId, assistantPlaceholderId, { attachments })
         },
+        onError: finalizeStreamError,
         onDone: (message) => {
           finalizeStreamingAssistant(sessionId, assistantPlaceholderId, message)
         },
@@ -376,8 +416,16 @@ export const useSessionStore = defineStore('session', () => {
       options?.files ?? [],
     )
 
-    await loadSessions().catch(() => undefined)
-    return reply
+    try {
+      return await replyPromise
+    } catch (error) {
+      if (!streamError) {
+        finalizeStreamError(error instanceof Error ? error.message : 'stream error')
+      }
+      throw error
+    } finally {
+      await loadSessions().catch(() => undefined)
+    }
   }
 
   async function cancelActiveStream(sessionId: string, streamId: string) {

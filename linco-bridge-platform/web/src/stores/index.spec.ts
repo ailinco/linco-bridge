@@ -176,9 +176,9 @@ describe('useSessionStore', () => {
 
     const store = useSessionStore()
     const pending = store.sendMessageStream('session-1', 'hi')
-    expect(store.getMessages('session-1').some((item) => item.role === 'user' && item.content === 'hi')).toBe(
-      true,
-    )
+    expect(
+      store.getMessages('session-1').some((item) => item.role === 'user' && item.content === 'hi'),
+    ).toBe(true)
     await pending
   })
 
@@ -234,5 +234,123 @@ describe('useSessionStore', () => {
     expect(roles).toEqual(['user', 'assistant', 'user', 'streaming'])
 
     await pending
+  })
+
+  it('keeps an SSE error visible and finalizes the placeholder', async () => {
+    const { streamSessionMessage } = await import('@/api/session-api')
+    vi.mocked(streamSessionMessage).mockImplementationOnce(
+      async (_sessionId, _content, handlers) => {
+        handlers.onStart?.({ streamId: 'stream-error' })
+        handlers.onChunk?.({ fullText: 'partial answer' })
+        handlers.onError?.('connector failed')
+        throw new Error('connector failed')
+      },
+    )
+
+    const store = useSessionStore()
+    await expect(store.sendMessageStream('session-1', 'hi')).rejects.toThrow('connector failed')
+
+    const assistant = store.getMessages('session-1').find((item) => item.role === 'assistant')
+    expect(assistant?.content).toBe('partial answer\n\nconnector failed')
+    expect(assistant?.streaming).toBe(false)
+    expect(assistant?.reasoningStreaming).toBe(false)
+  })
+
+  it('reconciles a synchronized final message without duplicating it', async () => {
+    const { streamSessionMessage } = await import('@/api/session-api')
+    const store = useSessionStore()
+    const finalMessage = {
+      id: 'assistant-final',
+      sessionId: 'session-1',
+      role: 'assistant' as const,
+      content: 'final answer',
+      createdAt: 20,
+    }
+    vi.mocked(streamSessionMessage).mockImplementationOnce(
+      async (_sessionId, _content, handlers) => {
+        handlers.onStart?.({ streamId: 'stream-final' })
+        handlers.onChunk?.({ fullText: 'draft answer' })
+        store.upsertMessage('session-1', { ...finalMessage, content: 'synchronized draft' })
+        handlers.onDone?.(finalMessage)
+        return finalMessage
+      },
+    )
+
+    await store.sendMessageStream('session-1', 'hi')
+
+    const assistants = store.getMessages('session-1').filter((item) => item.id === finalMessage.id)
+    expect(assistants).toHaveLength(1)
+    expect(assistants[0]?.content).toBe('final answer')
+  })
+
+  it('ignores late progress after final output starts', async () => {
+    const { streamSessionMessage } = await import('@/api/session-api')
+    let release!: () => void
+    const waitForDone = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    vi.mocked(streamSessionMessage).mockImplementationOnce(
+      async (_sessionId, _content, handlers) => {
+        handlers.onStart?.({ streamId: 'stream-phase' })
+        handlers.onChunk?.({ fullText: 'working', phase: 'progress', ephemeral: true })
+        handlers.onChunk?.({
+          fullText: 'final answer',
+          phase: 'final_answer',
+          ephemeral: false,
+          replacePrevious: true,
+        })
+        handlers.onChunk?.({ fullText: 'late progress', phase: 'progress', ephemeral: true })
+        await waitForDone
+        const reply = {
+          id: 'assistant-phase-final',
+          sessionId: 'session-1',
+          role: 'assistant' as const,
+          content: 'final answer',
+          createdAt: 30,
+        }
+        handlers.onDone?.(reply)
+        return reply
+      },
+    )
+
+    const store = useSessionStore()
+    const pending = store.sendMessageStream('session-1', 'hi')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const streamingContent = store.getMessages('session-1').find((item) => item.streaming)?.content
+    release()
+    await pending
+
+    expect(streamingContent).toBe('final answer')
+  })
+
+  it('keeps streamed trace and attachments when done omits them', async () => {
+    const { streamSessionMessage } = await import('@/api/session-api')
+    vi.mocked(streamSessionMessage).mockImplementationOnce(
+      async (_sessionId, _content, handlers) => {
+        handlers.onStart?.({ streamId: 'stream-metadata' })
+        handlers.onAgentTrace?.({
+          actions: [{ id: 'tool-1', type: 'tool', status: 'done', label: 'Read file' }],
+        })
+        handlers.onAttachment?.({ name: 'report.txt', mimeType: 'text/plain' })
+        const reply = {
+          id: 'assistant-metadata-final',
+          sessionId: 'session-1',
+          role: 'assistant' as const,
+          content: 'done',
+          createdAt: 40,
+        }
+        handlers.onDone?.(reply)
+        return reply
+      },
+    )
+
+    const store = useSessionStore()
+    await store.sendMessageStream('session-1', 'hi')
+
+    const assistant = store
+      .getMessages('session-1')
+      .find((item) => item.id === 'assistant-metadata-final')
+    expect(assistant?.agentTrace?.actions[0]?.id).toBe('tool-1')
+    expect(assistant?.attachments).toEqual([{ name: 'report.txt', mimeType: 'text/plain' }])
   })
 })
