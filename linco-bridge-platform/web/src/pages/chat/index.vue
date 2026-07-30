@@ -24,6 +24,7 @@ import {
 import { cloneOutboundFiles } from '@/utils/chat-attachments'
 import { useBridgeSettings } from '@/composables/useBridgeSettings'
 import { useSlashCommands } from '@/composables/useSlashCommands'
+import { buildChatLayoutKey, updateChatFollowState } from '@/utils/chat-scroll-policy'
 
 const chat = useChatSession()
 const { pickWorkspace } = useProjectPicker()
@@ -31,6 +32,8 @@ const queryAgentType = ref<AgentBridgeType | null>(null)
 const refreshing = ref(false)
 const routeSessionId = ref('')
 const routeReloadHistory = ref(false)
+const followLatest = ref(true)
+const lastScrollTop = ref<number>()
 const {
   draft,
   sending,
@@ -74,6 +77,8 @@ watch(
   () => chat.sessionId.value,
   (sessionId) => {
     if (!sessionId) return
+    followLatest.value = true
+    lastScrollTop.value = undefined
     const session = sessionStore.getSession(sessionId)
     bridgeSettings.applySessionSettings(session?.bridgeSettings ?? null)
     if (showBridgeSettings.value) {
@@ -122,18 +127,29 @@ onShow(() => {
 })
 
 watch(
+  () => buildChatLayoutKey(messages.value),
   () => {
-    const last = messages.value[messages.value.length - 1]
-    if (!last) return 'empty'
-    const attachmentKey = (last.attachments ?? [])
-      .map((item) => `${item.name}:${item.previewUrl?.length ?? 0}`)
-      .join('|')
-    return `${messages.value.length}:${last.id}:${last.content.length}:${attachmentKey}:${last.streaming ? 1 : 0}:${last.reasoningStreaming ? 1 : 0}`
-  },
-  () => {
-    scrollToBottom()
+    followLatestOutput()
   },
 )
+
+function followLatestOutput() {
+  if (followLatest.value) scrollToBottom()
+}
+
+function handleMessageScroll(event: { detail: { scrollTop?: number } }) {
+  const scrollTop = Number(event.detail.scrollTop)
+  if (!Number.isFinite(scrollTop)) return
+  followLatest.value = updateChatFollowState(followLatest.value, {
+    previousTop: lastScrollTop.value,
+    scrollTop,
+  })
+  lastScrollTop.value = scrollTop
+}
+
+function handleMessageScrollToLower() {
+  followLatest.value = updateChatFollowState(followLatest.value, { reachedBottom: true })
+}
 
 async function handleWorkspace() {
   if (!agentType.value) {
@@ -171,6 +187,7 @@ async function handleAdd() {
 }
 
 function handleSend() {
+  followLatest.value = true
   scrollToBottom()
   // 对齐 Flutter：先快照附件并立刻清空输入区，再异步发送（勿等整轮回复结束）
   const files = cloneOutboundFiles(pendingFiles.value)
@@ -233,7 +250,10 @@ async function handlePickSettings() {
       :refresher-triggered="refreshing"
       :scroll-with-animation="true"
       :scroll-into-view="scrollAnchor"
+      :lower-threshold="120"
       @refresherrefresh="handleRefresh"
+      @scroll="handleMessageScroll"
+      @scrolltolower="handleMessageScrollToLower"
     >
       <view v-if="loading && messages.length === 0 && !sending" class="chat-page__state">
         <text class="chat-page__state-text">加载中…</text>
@@ -248,7 +268,7 @@ async function handlePickSettings() {
           v-for="item in messages"
           :key="item.id"
           :message="item"
-          @layout-change="scrollToBottom"
+          @layout-change="followLatestOutput"
         />
       </view>
 
