@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, toRef } from 'vue'
 import ChatCodeBlock from '@/components/ChatCodeBlock.vue'
 import ChatHtmlBlock from '@/components/ChatHtmlBlock.vue'
 import MessageMarkdown from '@/components/MessageMarkdown.vue'
@@ -13,6 +13,7 @@ import {
   shouldRetryBridgeFileGet,
 } from '@/utils/attachment-open'
 import { showToast } from '@/utils/format'
+import { useThrottledStreamingContent } from '@/composables/useThrottledStreamingContent'
 
 
 
@@ -32,11 +33,16 @@ const props = defineProps<{
 
 const loadingTarget = ref('')
 
+const renderedContent = useThrottledStreamingContent(
+  toRef(props, 'content'),
+  toRef(props, 'streaming'),
+)
 
+const segments = computed(() =>
+  parseMessageSegments(renderedContent.value, { streaming: props.streaming }),
+)
 
-const segments = computed(() => parseMessageSegments(props.content, { streaming: props.streaming }))
-
-const useRich = computed(() => hasRichMessageContent(props.content, props.streaming))
+const useRich = computed(() => hasRichMessageContent(renderedContent.value, props.streaming))
 
 
 
@@ -131,7 +137,7 @@ async function handleLinkTap(target: string) {
 
     v-if="!useRich"
 
-    :content="content"
+    :content="renderedContent"
 
     :variant="variant"
 
