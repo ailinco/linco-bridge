@@ -159,4 +159,24 @@ describe('ChatBubble assistant streaming layout', () => {
     ])
     expect(sheet.attributes('content')).toBeUndefined()
   })
+
+  it('treats completed reasoning as finished while the answer body is still streaming', () => {
+    const wrapper = mount(ChatBubble, {
+      props: {
+        message: assistantMessage({
+          content: 'partial answer',
+          streaming: true,
+          reasoning: {
+            content: 'completed reasoning',
+            startedAt: 1,
+            endedAt: 2,
+          },
+          reasoningStreaming: false,
+        }),
+      },
+      global: { stubs },
+    })
+
+    expect(wrapper.findComponent({ name: 'ThinkingProcessSheet' }).props('streaming')).toBe(false)
+  })
 })

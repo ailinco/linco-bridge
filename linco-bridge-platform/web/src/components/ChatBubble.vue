@@ -9,7 +9,7 @@ import ThinkingProcessSheet from '@/components/ThinkingProcessSheet.vue'
 import { resolveStreamingTailIndicator } from '@/utils/chat-streaming-indicator'
 import { isEmptyAgentTrace } from '@/utils/agent-trace-view'
 import { isMiniProgramRuntime } from '@/utils/platform-runtime'
-import { resolveDisplayAgentTrace } from '@/utils/thinking-trace'
+import { isDisplayAgentTraceActive, resolveDisplayAgentTrace } from '@/utils/thinking-trace'
 
 const props = defineProps<{
   message: ChatMessage
@@ -40,9 +40,7 @@ const processEndedAt = computed(
   () => props.message.reasoning?.endedAt ?? props.message.agentTrace?.task?.completed_at,
 )
 const processStreaming = computed(
-  () =>
-    props.message.reasoningStreaming === true ||
-    (props.message.streaming === true && hasAgentTrace.value),
+  () => props.message.reasoningStreaming === true || isDisplayAgentTraceActive(displayTrace.value),
 )
 
 const tailIndicator = computed(() =>

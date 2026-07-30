@@ -1,9 +1,21 @@
 import type { AgentTrace, AgentTraceAction, ChatMessageReasoning } from '@/bridge/types'
+import { isActionActive } from '@/utils/agent-trace-view'
 
 function containsThinking(actions: AgentTraceAction[]): boolean {
   return actions.some(
     (action) => action.type === 'thinking' || containsThinking(action.children ?? []),
   )
+}
+
+function containsActiveAction(actions: AgentTraceAction[]): boolean {
+  return actions.some(
+    (action) => isActionActive(action.status) || containsActiveAction(action.children ?? []),
+  )
+}
+
+export function isDisplayAgentTraceActive(trace: AgentTrace | undefined): boolean {
+  if (!trace) return false
+  return isActionActive(trace.task?.status ?? '') || containsActiveAction(trace.actions)
 }
 
 export function resolveDisplayAgentTrace(

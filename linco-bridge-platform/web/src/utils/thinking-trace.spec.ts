@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentTrace, ChatMessageReasoning } from '@/bridge/types'
-import { resolveDisplayAgentTrace } from './thinking-trace'
+import { isDisplayAgentTraceActive, resolveDisplayAgentTrace } from './thinking-trace'
 
 const reasoning: ChatMessageReasoning = {
   content: 'Inspect the repository before editing.',
@@ -59,5 +59,24 @@ describe('thinking-trace', () => {
     expect(result?.task).toBe(trace.task)
     expect(result?.actions.map((item) => item.id)).toEqual(['tool-1', 'legacy-reasoning'])
     expect(result?.actions[1]?.status).toBe('running')
+  })
+
+  it('detects active nested trace actions without relying on body streaming', () => {
+    const trace: AgentTrace = {
+      actions: [
+        {
+          id: 'parent',
+          type: 'tool',
+          status: 'completed',
+          label: 'Parent',
+          children: [{ id: 'child', type: 'tool', status: 'running', label: 'Child' }],
+        },
+      ],
+    }
+
+    expect(isDisplayAgentTraceActive(trace)).toBe(true)
+    expect(isDisplayAgentTraceActive(resolveDisplayAgentTrace(undefined, reasoning, false))).toBe(
+      false,
+    )
   })
 })
