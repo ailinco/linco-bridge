@@ -24,7 +24,12 @@ const stubs = {
     props: ['content', 'variant', 'sessionId', 'streaming'],
   },
   MessageAttachmentList: true,
-  ThinkingProcessSheet: true,
+  ThinkingProcessSheet: {
+    name: 'ThinkingProcessSheet',
+    template:
+      '<div data-test="thinking-sheet">{{ trace?.actions?.map((item) => item.id).join(",") }}</div>',
+    props: ['trace', 'visible', 'streaming'],
+  },
   ChatStreamingIndicator: {
     template: '<div data-test="streaming-indicator">{{ label }}</div>',
     props: ['label'],
@@ -132,5 +137,26 @@ describe('ChatBubble assistant streaming layout', () => {
     })
 
     expect(wrapper.find('[data-test="streaming-indicator"]').exists()).toBe(false)
+  })
+
+  it('projects legacy reasoning into the trace passed to the thinking sheet', () => {
+    const wrapper = mount(ChatBubble, {
+      props: {
+        message: assistantMessage({
+          reasoning: {
+            content: 'legacy reasoning',
+            startedAt: 1,
+            endedAt: 2,
+          },
+        }),
+      },
+      global: { stubs },
+    })
+
+    const sheet = wrapper.findComponent({ name: 'ThinkingProcessSheet' })
+    expect(sheet.props('trace').actions.map((item: { id: string }) => item.id)).toEqual([
+      'legacy-reasoning',
+    ])
+    expect(sheet.attributes('content')).toBeUndefined()
   })
 })

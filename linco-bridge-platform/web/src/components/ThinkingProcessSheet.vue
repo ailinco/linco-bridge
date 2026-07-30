@@ -1,13 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import type { AgentTrace } from '@/bridge/types'
 import AgentTraceActionCard from '@/components/AgentTraceActionCard.vue'
-import MessageMarkdown from '@/components/MessageMarkdown.vue'
 import { isEmptyAgentTrace, traceSummaryStatus } from '@/utils/agent-trace-view'
+import { updateChatFollowState } from '@/utils/chat-scroll-policy'
 
 const props = defineProps<{
   visible: boolean
-  content: string
   trace?: AgentTrace
   streaming?: boolean
 }>()
@@ -20,9 +19,56 @@ const hasTrace = computed(() => !isEmptyAgentTrace(props.trace))
 const summary = computed(() =>
   props.trace ? traceSummaryStatus(props.trace, props.streaming) : '思考过程',
 )
-const showLegacyReasoning = computed(
-  () => Boolean(props.content.trim()) && !props.trace?.actions.some((item) => item.type === 'thinking'),
+const actionStateKey = computed(() =>
+  (props.trace?.actions ?? [])
+    .map((action) => `${action.id}:${action.status}:${action.detail?.length ?? 0}`)
+    .join('|'),
 )
+const scrollAnchor = ref('')
+const following = ref(true)
+const lastScrollTop = ref<number>()
+
+function followLatestAction() {
+  if (!props.visible || !props.streaming || !following.value) return
+  const lastIndex = (props.trace?.actions.length ?? 0) - 1
+  if (lastIndex < 0) return
+  const target = `thinking-action-${lastIndex}`
+  if (scrollAnchor.value !== target) {
+    scrollAnchor.value = target
+    return
+  }
+  scrollAnchor.value = ''
+  void nextTick(() => {
+    scrollAnchor.value = target
+  })
+}
+
+function handleScroll(event: { detail: { scrollTop?: number } }) {
+  const scrollTop = Number(event.detail.scrollTop)
+  if (!Number.isFinite(scrollTop)) return
+  following.value = updateChatFollowState(following.value, {
+    previousTop: lastScrollTop.value,
+    scrollTop,
+  })
+  lastScrollTop.value = scrollTop
+}
+
+function handleScrollToLower() {
+  following.value = updateChatFollowState(following.value, { reachedBottom: true })
+}
+
+watch(
+  () => [props.visible, props.streaming] as const,
+  ([visible, streaming]) => {
+    following.value = true
+    lastScrollTop.value = undefined
+    scrollAnchor.value = ''
+    if (visible && streaming) followLatestAction()
+  },
+  { immediate: true },
+)
+
+watch(actionStateKey, followLatestAction)
 </script>
 
 <template>
@@ -46,20 +92,26 @@ const showLegacyReasoning = computed(
 
       <view class="thinking-sheet__divider" />
 
-      <scroll-view class="thinking-sheet__body" scroll-y :show-scrollbar="false">
+      <scroll-view
+        class="thinking-sheet__body"
+        scroll-y
+        :show-scrollbar="false"
+        :scroll-into-view="scrollAnchor"
+        :lower-threshold="80"
+        @scroll="handleScroll"
+        @scrolltolower="handleScrollToLower"
+      >
         <view v-if="hasTrace" class="thinking-sheet__trace">
-          <AgentTraceActionCard
-            v-for="action in trace!.actions"
+          <view
+            v-for="(action, index) in trace!.actions"
+            :id="`thinking-action-${index}`"
             :key="action.id"
-            :action="action"
-          />
+          >
+            <AgentTraceActionCard :action="action" />
+          </view>
         </view>
 
-        <view v-if="showLegacyReasoning" class="thinking-sheet__content">
-          <MessageMarkdown :content="content" variant="assistant" />
-        </view>
-
-        <view v-if="!hasTrace && !content.trim()" class="thinking-sheet__empty-wrap">
+        <view v-if="!hasTrace" class="thinking-sheet__empty-wrap">
           <text class="thinking-sheet__empty">暂无思考内容</text>
         </view>
       </scroll-view>
@@ -166,8 +218,7 @@ const showLegacyReasoning = computed(
   max-height: calc(78vh - 180rpx);
 }
 
-.thinking-sheet__trace,
-.thinking-sheet__content {
+.thinking-sheet__trace {
   box-sizing: border-box;
   width: 100%;
   padding: 28rpx 32rpx 40rpx;

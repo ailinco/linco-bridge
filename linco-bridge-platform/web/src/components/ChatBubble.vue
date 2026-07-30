@@ -9,6 +9,7 @@ import ThinkingProcessSheet from '@/components/ThinkingProcessSheet.vue'
 import { resolveStreamingTailIndicator } from '@/utils/chat-streaming-indicator'
 import { isEmptyAgentTrace } from '@/utils/agent-trace-view'
 import { isMiniProgramRuntime } from '@/utils/platform-runtime'
+import { resolveDisplayAgentTrace } from '@/utils/thinking-trace'
 
 const props = defineProps<{
   message: ChatMessage
@@ -20,10 +21,15 @@ const emit = defineEmits<{
 
 const sheetVisible = ref(false)
 
-const hasAgentTrace = computed(() => !isEmptyAgentTrace(props.message.agentTrace))
-const hasReasoning = computed(() => Boolean(props.message.reasoning?.content.trim()))
-const hasProcessEntry = computed(() => hasReasoning.value || hasAgentTrace.value)
-const reasoningContent = computed(() => props.message.reasoning?.content ?? '')
+const displayTrace = computed(() =>
+  resolveDisplayAgentTrace(
+    props.message.agentTrace,
+    props.message.reasoning,
+    props.message.reasoningStreaming === true,
+  ),
+)
+const hasAgentTrace = computed(() => !isEmptyAgentTrace(displayTrace.value))
+const hasProcessEntry = computed(() => hasAgentTrace.value)
 const processStartedAt = computed(
   () =>
     props.message.reasoning?.startedAt ??
@@ -34,7 +40,9 @@ const processEndedAt = computed(
   () => props.message.reasoning?.endedAt ?? props.message.agentTrace?.task?.completed_at,
 )
 const processStreaming = computed(
-  () => props.message.reasoningStreaming === true || (props.message.streaming === true && hasAgentTrace.value),
+  () =>
+    props.message.reasoningStreaming === true ||
+    (props.message.streaming === true && hasAgentTrace.value),
 )
 
 const tailIndicator = computed(() =>
@@ -49,7 +57,7 @@ const tailIndicator = computed(() =>
 </script>
 
 <template>
-  <view class="message-row" :class="`message-row--${message.role}`" :id="message.id">
+  <view :id="message.id" class="message-row" :class="`message-row--${message.role}`">
     <view v-if="message.role === 'user'" class="message-row__user-wrap">
       <view class="message-row__user-bubble">
         <MessageAttachmentList
@@ -102,8 +110,7 @@ const tailIndicator = computed(() =>
 
     <ThinkingProcessSheet
       :visible="sheetVisible"
-      :content="reasoningContent"
-      :trace="message.agentTrace"
+      :trace="displayTrace"
       :streaming="processStreaming"
       @close="sheetVisible = false"
     />
