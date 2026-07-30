@@ -40,7 +40,9 @@ const processEndedAt = computed(
   () => props.message.reasoning?.endedAt ?? props.message.agentTrace?.task?.completed_at,
 )
 const processStreaming = computed(
-  () => props.message.reasoningStreaming === true || isDisplayAgentTraceActive(displayTrace.value),
+  () =>
+    props.message.reasoningStreaming === true ||
+    (props.message.streaming === true && isDisplayAgentTraceActive(displayTrace.value)),
 )
 
 const tailIndicator = computed(() =>

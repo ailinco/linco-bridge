@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useSessionStore } from '@/stores'
+import { createCancelToken } from '@/utils/platform-runtime'
 
 vi.mock('@/api/session-api', () => ({
   fetchSessions: vi.fn(async () => [
@@ -352,5 +353,23 @@ describe('useSessionStore', () => {
       .find((item) => item.id === 'assistant-metadata-final')
     expect(assistant?.agentTrace?.actions[0]?.id).toBe('tool-1')
     expect(assistant?.attachments).toEqual([{ name: 'report.txt', mimeType: 'text/plain' }])
+  })
+
+  it('does not record an intentional cancellation before the stream starts as an error', async () => {
+    const { streamSessionMessage } = await import('@/api/session-api')
+    vi.mocked(streamSessionMessage).mockImplementationOnce(
+      async (_sessionId, _content, _handlers, cancel) => {
+        await new Promise<void>((resolve) => cancel?.onAbort(resolve))
+        throw new Error('Aborted')
+      },
+    )
+
+    const store = useSessionStore()
+    const cancel = createCancelToken()
+    const pending = store.sendMessageStream('session-1', 'hi', { cancel })
+    cancel.abort()
+
+    await expect(pending).rejects.toThrow('Aborted')
+    expect(store.getMessages('session-1').filter((item) => item.role === 'assistant')).toEqual([])
   })
 })

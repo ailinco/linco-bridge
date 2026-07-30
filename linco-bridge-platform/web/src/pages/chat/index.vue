@@ -24,7 +24,11 @@ import {
 import { cloneOutboundFiles } from '@/utils/chat-attachments'
 import { useBridgeSettings } from '@/composables/useBridgeSettings'
 import { useSlashCommands } from '@/composables/useSlashCommands'
-import { buildChatLayoutKey, updateChatFollowState } from '@/utils/chat-scroll-policy'
+import {
+  buildChatLayoutKey,
+  updateChatFollowState,
+  type ChatFollowState,
+} from '@/utils/chat-scroll-policy'
 
 const chat = useChatSession()
 const { pickWorkspace } = useProjectPicker()
@@ -32,8 +36,7 @@ const queryAgentType = ref<AgentBridgeType | null>(null)
 const refreshing = ref(false)
 const routeSessionId = ref('')
 const routeReloadHistory = ref(false)
-const followLatest = ref(true)
-const lastScrollTop = ref<number>()
+const followLatest = ref<ChatFollowState>({ following: true })
 const {
   draft,
   sending,
@@ -77,8 +80,7 @@ watch(
   () => chat.sessionId.value,
   (sessionId) => {
     if (!sessionId) return
-    followLatest.value = true
-    lastScrollTop.value = undefined
+    followLatest.value = { following: true }
     const session = sessionStore.getSession(sessionId)
     bridgeSettings.applySessionSettings(session?.bridgeSettings ?? null)
     if (showBridgeSettings.value) {
@@ -134,17 +136,13 @@ watch(
 )
 
 function followLatestOutput() {
-  if (followLatest.value) scrollToBottom()
+  if (followLatest.value.following) scrollToBottom()
 }
 
 function handleMessageScroll(event: { detail: { scrollTop?: number } }) {
   const scrollTop = Number(event.detail.scrollTop)
   if (!Number.isFinite(scrollTop)) return
-  followLatest.value = updateChatFollowState(followLatest.value, {
-    previousTop: lastScrollTop.value,
-    scrollTop,
-  })
-  lastScrollTop.value = scrollTop
+  followLatest.value = updateChatFollowState(followLatest.value, { scrollTop })
 }
 
 function handleMessageScrollToLower() {
@@ -187,7 +185,7 @@ async function handleAdd() {
 }
 
 function handleSend() {
-  followLatest.value = true
+  followLatest.value = { following: true }
   scrollToBottom()
   // 对齐 Flutter：先快照附件并立刻清空输入区，再异步发送（勿等整轮回复结束）
   const files = cloneOutboundFiles(pendingFiles.value)

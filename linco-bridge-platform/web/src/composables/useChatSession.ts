@@ -174,7 +174,6 @@ export function useChatSession() {
       activeStreamId.value = ''
       sending.value = false
       await refreshHeader()
-      scrollToBottom()
     }
   }
 
@@ -196,7 +195,6 @@ export function useChatSession() {
     sending.value = false
     activeStreamId.value = ''
     cancelToken.value = null
-    scrollToBottom()
   }
 
   async function reloadHistory(limit?: number, reload = true) {

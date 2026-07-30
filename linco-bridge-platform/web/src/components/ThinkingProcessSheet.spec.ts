@@ -61,8 +61,9 @@ describe('ThinkingProcessSheet follow behavior', () => {
     })
     const scrollView = wrapper.find('[data-test="scroll-view"]')
     await wrapper.vm.$nextTick()
-    scrollView.element.dispatchEvent(new CustomEvent('scroll', { detail: { scrollTop: 500 } }))
-    scrollView.element.dispatchEvent(new CustomEvent('scroll', { detail: { scrollTop: 400 } }))
+    for (const scrollTop of [500, 490, 480, 470]) {
+      scrollView.element.dispatchEvent(new CustomEvent('scroll', { detail: { scrollTop } }))
+    }
     await wrapper.vm.$nextTick()
     await wrapper.setProps({ trace: trace('running', 2) })
     await wrapper.vm.$nextTick()

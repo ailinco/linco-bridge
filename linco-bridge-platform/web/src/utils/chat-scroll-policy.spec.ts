@@ -1,15 +1,34 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatMessage } from '@/bridge/types'
-import { buildChatLayoutKey, updateChatFollowState } from './chat-scroll-policy'
+import {
+  buildChatLayoutKey,
+  updateChatFollowState,
+  type ChatFollowState,
+} from './chat-scroll-policy'
 
 describe('chat-scroll-policy', () => {
   it('stops following after a meaningful upward scroll', () => {
-    expect(updateChatFollowState(true, { previousTop: 500, scrollTop: 430 })).toBe(false)
-    expect(updateChatFollowState(true, { previousTop: 500, scrollTop: 490 })).toBe(true)
+    expect(
+      updateChatFollowState({ following: true, referenceTop: 500 }, { scrollTop: 430 }).following,
+    ).toBe(false)
+    expect(
+      updateChatFollowState({ following: true, referenceTop: 500 }, { scrollTop: 490 }).following,
+    ).toBe(true)
+  })
+
+  it('stops following after cumulative small upward scroll events', () => {
+    let state: ChatFollowState = { following: true }
+    for (const scrollTop of [500, 490, 480, 470]) {
+      state = updateChatFollowState(state, { scrollTop })
+    }
+
+    expect(state.following).toBe(false)
   })
 
   it('resumes following when the bottom threshold is reached', () => {
-    expect(updateChatFollowState(false, { reachedBottom: true })).toBe(true)
+    expect(updateChatFollowState({ following: false }, { reachedBottom: true })).toEqual({
+      following: true,
+    })
   })
 
   it('includes trace-only changes in the chat layout key', () => {

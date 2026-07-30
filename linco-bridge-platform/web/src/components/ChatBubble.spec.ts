@@ -179,4 +179,22 @@ describe('ChatBubble assistant streaming layout', () => {
 
     expect(wrapper.findComponent({ name: 'ThinkingProcessSheet' }).props('streaming')).toBe(false)
   })
+
+  it('treats a retained running trace as finished after the message stream ends', () => {
+    const wrapper = mount(ChatBubble, {
+      props: {
+        message: assistantMessage({
+          content: 'final answer',
+          streaming: false,
+          agentTrace: {
+            task: { status: 'task_running' },
+            actions: [{ id: 'tool-1', type: 'tool', status: 'running', label: 'Read file' }],
+          },
+        }),
+      },
+      global: { stubs },
+    })
+
+    expect(wrapper.findComponent({ name: 'ThinkingProcessSheet' }).props('streaming')).toBe(false)
+  })
 })

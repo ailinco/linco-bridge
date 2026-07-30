@@ -3,7 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import type { AgentTrace } from '@/bridge/types'
 import AgentTraceActionCard from '@/components/AgentTraceActionCard.vue'
 import { isEmptyAgentTrace, traceSummaryStatus } from '@/utils/agent-trace-view'
-import { updateChatFollowState } from '@/utils/chat-scroll-policy'
+import { updateChatFollowState, type ChatFollowState } from '@/utils/chat-scroll-policy'
 
 const props = defineProps<{
   visible: boolean
@@ -25,11 +25,10 @@ const actionStateKey = computed(() =>
     .join('|'),
 )
 const scrollAnchor = ref('')
-const following = ref(true)
-const lastScrollTop = ref<number>()
+const following = ref<ChatFollowState>({ following: true })
 
 function followLatestAction() {
-  if (!props.visible || !props.streaming || !following.value) return
+  if (!props.visible || !props.streaming || !following.value.following) return
   const lastIndex = (props.trace?.actions.length ?? 0) - 1
   if (lastIndex < 0) return
   const target = `thinking-action-${lastIndex}`
@@ -46,11 +45,7 @@ function followLatestAction() {
 function handleScroll(event: { detail: { scrollTop?: number } }) {
   const scrollTop = Number(event.detail.scrollTop)
   if (!Number.isFinite(scrollTop)) return
-  following.value = updateChatFollowState(following.value, {
-    previousTop: lastScrollTop.value,
-    scrollTop,
-  })
-  lastScrollTop.value = scrollTop
+  following.value = updateChatFollowState(following.value, { scrollTop })
 }
 
 function handleScrollToLower() {
@@ -60,8 +55,7 @@ function handleScrollToLower() {
 watch(
   () => [props.visible, props.streaming] as const,
   ([visible, streaming]) => {
-    following.value = true
-    lastScrollTop.value = undefined
+    following.value = { following: true }
     scrollAnchor.value = ''
     if (visible && streaming) followLatestAction()
   },

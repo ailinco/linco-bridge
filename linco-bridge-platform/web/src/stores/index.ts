@@ -419,7 +419,7 @@ export const useSessionStore = defineStore('session', () => {
     try {
       return await replyPromise
     } catch (error) {
-      if (!streamError) {
+      if (!streamError && !options?.cancel?.aborted) {
         finalizeStreamError(error instanceof Error ? error.message : 'stream error')
       }
       throw error

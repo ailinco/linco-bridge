@@ -2,14 +2,23 @@ import type { AgentTraceAction, ChatMessage } from '@/bridge/types'
 
 const UPWARD_SCROLL_THRESHOLD = 24
 
+export interface ChatFollowState {
+  following: boolean
+  referenceTop?: number
+}
+
 export function updateChatFollowState(
-  following: boolean,
-  input: { previousTop?: number; scrollTop?: number; reachedBottom?: boolean },
-): boolean {
-  if (input.reachedBottom) return true
-  if (input.previousTop == null || input.scrollTop == null) return following
-  if (input.previousTop - input.scrollTop > UPWARD_SCROLL_THRESHOLD) return false
-  return following
+  state: ChatFollowState,
+  input: { scrollTop?: number; reachedBottom?: boolean },
+): ChatFollowState {
+  if (input.reachedBottom) return { following: true }
+  if (input.scrollTop == null || !state.following) return state
+
+  const referenceTop = Math.max(state.referenceTop ?? input.scrollTop, input.scrollTop)
+  return {
+    following: referenceTop - input.scrollTop <= UPWARD_SCROLL_THRESHOLD,
+    referenceTop,
+  }
 }
 
 function traceActionKey(action: AgentTraceAction): string {
