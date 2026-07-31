@@ -26,16 +26,22 @@ const emit = defineEmits<{
 
 const hasText = computed(() => props.modelValue.trim().length > 0)
 
-function handleInput(event: { detail: { value: string } }) {
-  emit('update:modelValue', event.detail.value)
+function inputValue(event: Event): string {
+  const detailValue = (event as Event & { detail?: { value?: unknown } }).detail?.value
+  if (detailValue != null) return String(detailValue)
+  return (event.target as HTMLInputElement | null)?.value ?? ''
+}
+
+function handleInput(event: Event) {
+  emit('update:modelValue', inputValue(event))
 }
 
 function handleFocus() {
   emit('focus')
 }
 
-function handleConfirm(event: { detail: { value: string } }) {
-  emit('confirm', event.detail.value)
+function handleConfirm(event: Event) {
+  emit('confirm', inputValue(event))
 }
 
 function handleTap() {
@@ -63,11 +69,7 @@ function handleClear() {
       @focus="handleFocus"
       @confirm="handleConfirm"
     />
-    <view
-      v-if="showClearButton && hasText"
-      class="app-search-bar__clear"
-      @tap.stop="handleClear"
-    >
+    <view v-if="showClearButton && hasText" class="app-search-bar__clear" @tap.stop="handleClear">
       <text class="app-search-bar__clear-icon">×</text>
     </view>
   </view>

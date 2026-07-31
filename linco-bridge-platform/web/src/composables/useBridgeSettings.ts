@@ -50,16 +50,12 @@ export function useBridgeSettings() {
     persist?: boolean
   }): Promise<BridgeSettingsPickerResult | null> {
     let options = cachedOptions.value
-    try {
-      options = await bridgeStore.sdk.loadSettingsOptions(
-        input.agentType,
-        input.connectionId,
-        input.sessionId,
-      )
-      cachedOptions.value = options
-    } catch (error) {
-      throw error
-    }
+    options = await bridgeStore.sdk.loadSettingsOptions(
+      input.agentType,
+      input.connectionId,
+      input.sessionId,
+    )
+    cachedOptions.value = options
 
     const picked = await showBridgeSettingsPicker({
       agentType: input.agentType,
@@ -76,8 +72,7 @@ export function useBridgeSettings() {
       modelName: picked.modelName ?? pendingSettings.value?.modelName,
       updatedAt: Date.now(),
     }
-    pendingSettings.value =
-      next.reasoningEffort?.trim() || next.modelId?.trim() ? next : null
+    pendingSettings.value = next.reasoningEffort?.trim() || next.modelId?.trim() ? next : null
     syncSettingsLabel(options)
 
     if (input.persist && input.sessionId) {

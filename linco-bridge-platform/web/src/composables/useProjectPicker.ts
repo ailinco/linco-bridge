@@ -1,12 +1,12 @@
-import type { AgentBridgeType, AgentWorkspace } from '@/bridge/types'
-import { pickBridgeWorkspace } from '@/utils/pick-workspace'
+import type { AgentBridgeType } from '@/bridge/types'
+import { pickBridgeWorkspace, type PickWorkspaceResult } from '@/utils/pick-workspace'
 
 export function useProjectPicker() {
   async function pickWorkspace(
     agentType: AgentBridgeType,
     connectionId?: string,
     platformSessionId?: string,
-  ): Promise<AgentWorkspace | null> {
+  ): Promise<PickWorkspaceResult | null> {
     return pickBridgeWorkspace(agentType, connectionId, platformSessionId)
   }
 

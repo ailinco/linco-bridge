@@ -66,7 +66,7 @@ async function handleCopy() {
 
     <scroll-view v-else scroll-y class="chat-code__scroll" :show-scrollbar="false">
       <!-- #ifdef H5 -->
-      <view class="chat-code__body chat-code__body--highlighted" v-html="highlightedBlockHtml" />
+      <div class="chat-code__body chat-code__body--highlighted" v-html="highlightedBlockHtml" />
       <!-- #endif -->
       <!-- #ifndef H5 -->
       <text class="chat-code__body" selectable>{{ code }}</text>

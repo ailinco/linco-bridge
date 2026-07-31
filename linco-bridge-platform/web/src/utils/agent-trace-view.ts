@@ -55,13 +55,11 @@ export function planTodosForAction(action: AgentTraceAction): AgentTraceTodo[] {
 function todosFromPlanObject(value: unknown): AgentTraceTodo[] {
   if (!value || typeof value !== 'object') return []
   const record = value as Record<string, unknown>
-  const rawTodos =
-    (Array.isArray(record.todos) && record.todos) ||
-    (record.update &&
-      typeof record.update === 'object' &&
-      Array.isArray((record.update as Record<string, unknown>).todos) &&
-      (record.update as Record<string, unknown>).todos) ||
-    null
+  let rawTodos: unknown[] | null = Array.isArray(record.todos) ? record.todos : null
+  if (!rawTodos && record.update && typeof record.update === 'object') {
+    const updateTodos = (record.update as Record<string, unknown>).todos
+    rawTodos = Array.isArray(updateTodos) ? updateTodos : null
+  }
   if (!rawTodos) return []
   return rawTodos
     .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
@@ -98,7 +96,10 @@ export function traceSummaryStatus(trace: AgentTrace, streaming = false): string
   }
   const activeAction = trace.actions.find((action) => isActionActive(action.status))
   if (streaming && activeAction) return actionTitle(activeAction)
-  if (trace.task?.status === 'task_success' || isActionSuccess(trace.actions.at(-1)?.status ?? '')) {
+  if (
+    trace.task?.status === 'task_success' ||
+    isActionSuccess(trace.actions.at(-1)?.status ?? '')
+  ) {
     return '已完成'
   }
   if (trace.task?.status === 'task_failed') return '执行失败'

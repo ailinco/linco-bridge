@@ -37,7 +37,7 @@ export function createRestAgentChatSdk(): AgentChatSdk {
 
     async listHistory(
       agentType: AgentBridgeType,
-      options?: { limit?: number; offset?: number },
+      options?: { limit?: number; offset?: number; connectionId?: string },
     ): Promise<AgentHistoryItem[]> {
       let params = createQueryParams()
       if (options?.limit != null) params = setQueryParam(params, 'limit', options.limit)
@@ -53,10 +53,7 @@ export function createRestAgentChatSdk(): AgentChatSdk {
       return res.data
     },
 
-    async hideHistorySessions(
-      agentType: AgentBridgeType,
-      sessionIds: string[],
-    ): Promise<number> {
+    async hideHistorySessions(agentType: AgentBridgeType, sessionIds: string[]): Promise<number> {
       const res = await apiPost<{ hiddenCount: number }>(
         `/api/agent-chat/${agentType}/history/hide`,
         { sessionIds },

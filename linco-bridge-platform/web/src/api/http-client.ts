@@ -1,12 +1,6 @@
 import type { ApiResponse } from '@/bridge/types'
 import { clearVisitorSessionToken } from '@/utils/visitor-session'
-import {
-  buildApiRequestHeaders,
-  buildApiUrl,
-  CHAT_REQUEST_TIMEOUT_MS,
-  getApiBaseUrl,
-  requestJson,
-} from './http-transport'
+import { buildApiRequestHeaders, buildApiUrl, getApiBaseUrl, requestJson } from './http-transport'
 import { bootstrapVisitorSession, ensureVisitorSession } from './visitor-bootstrap'
 
 export { buildApiRequestHeaders, getApiBaseUrl }

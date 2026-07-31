@@ -74,7 +74,7 @@ async function handleCopy() {
       />
     </view>
     <scroll-view v-else scroll-y class="chat-html__scroll" :show-scrollbar="false">
-      <view class="chat-html__body chat-html__body--highlighted" v-html="highlightedBlockHtml" />
+      <div class="chat-html__body chat-html__body--highlighted" v-html="highlightedBlockHtml" />
     </scroll-view>
     <!-- #endif -->
 

@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 
-import type { AgentBridgeType, BridgeProjectItem, BridgeWorkspaceSession } from '@/bridge/types'
+import type { BridgeProjectItem, BridgeWorkspaceSession } from '@/bridge/types'
 import { useBridgeStore } from '@/stores'
-import { bridgeWorkspacePickerState, resolveBridgeWorkspacePicker } from '@/utils/bridge-workspace-picker'
+import {
+  bridgeWorkspacePickerState,
+  resolveBridgeWorkspacePicker,
+} from '@/utils/bridge-workspace-picker'
 import { showToast } from '@/utils/format'
 import { CHAT_ICON } from '@/constants/chat-icons'
 
@@ -102,7 +105,10 @@ async function ensureSessions(projectPath: string, refresh = false) {
     if (!refreshingSessionPaths.value.includes(projectPath)) {
       refreshingSessionPaths.value = [...refreshingSessionPaths.value, projectPath]
     }
-  } else if (!sessionsByProject.value[projectPath] && !loadingSessionPaths.value.includes(projectPath)) {
+  } else if (
+    !sessionsByProject.value[projectPath] &&
+    !loadingSessionPaths.value.includes(projectPath)
+  ) {
     loadingSessionPaths.value = [...loadingSessionPaths.value, projectPath]
   } else if (sessionsByProject.value[projectPath] && !refresh) {
     return
@@ -120,7 +126,9 @@ async function ensureSessions(projectPath: string, refresh = false) {
     showToast(err instanceof Error ? err.message : '无法同步该项目会话')
   } finally {
     loadingSessionPaths.value = loadingSessionPaths.value.filter((item) => item !== projectPath)
-    refreshingSessionPaths.value = refreshingSessionPaths.value.filter((item) => item !== projectPath)
+    refreshingSessionPaths.value = refreshingSessionPaths.value.filter(
+      (item) => item !== projectPath,
+    )
   }
 }
 
@@ -215,7 +223,6 @@ async function handleCreateProjectSession(project: BridgeProjectItem) {
 }
 
 async function handleSelectChat(session: BridgeWorkspaceSession) {
-  const project: BridgeProjectItem = { id: 'chat', name: '对话', path: '' }
   const key = `chat:${session.id}`
   await runSelecting(key, async () => {
     try {
@@ -300,7 +307,11 @@ function handleDismiss() {
         </view>
 
         <view v-else class="workspace-sheet__list">
-          <view v-for="project in projects" :key="project.path" class="workspace-sheet__project-block">
+          <view
+            v-for="project in projects"
+            :key="project.path"
+            class="workspace-sheet__project-block"
+          >
             <view class="workspace-sheet__project-row" @tap="toggleExpanded(project.path)">
               <image class="workspace-sheet__folder" :src="CHAT_ICON.folder" mode="aspectFit" />
               <text class="workspace-sheet__project-name">{{ project.name }}</text>
@@ -312,21 +323,30 @@ function handleDismiss() {
                 class="workspace-sheet__icon-btn"
                 @tap.stop="handleCreateProjectSession(project)"
               >
-                <text v-if="selectingKey === `project:${project.path}`" class="workspace-sheet__spinner-text">…</text>
+                <text
+                  v-if="selectingKey === `project:${project.path}`"
+                  class="workspace-sheet__spinner-text"
+                  >…</text
+                >
                 <text v-else class="workspace-sheet__plus">+</text>
               </view>
-              <text class="workspace-sheet__chevron">{{ isExpanded(project.path) ? '▾' : '▸' }}</text>
+              <text class="workspace-sheet__chevron">{{
+                isExpanded(project.path) ? '▾' : '▸'
+              }}</text>
             </view>
 
             <view v-if="isExpanded(project.path)" class="workspace-sheet__sessions">
               <view
-                v-if="loadingSessionPaths.includes(project.path) && !sessionsByProject[project.path]?.length"
+                v-if="
+                  loadingSessionPaths.includes(project.path) &&
+                  !sessionsByProject[project.path]?.length
+                "
                 class="workspace-sheet__session-placeholder"
               >
                 暂无会话
               </view>
               <view
-                v-else-if="!(sessionsByProject[project.path]?.length)"
+                v-else-if="!sessionsByProject[project.path]?.length"
                 class="workspace-sheet__session-placeholder"
               >
                 暂无会话
@@ -339,7 +359,9 @@ function handleDismiss() {
                   @tap="handleSelectSession(project, session)"
                 >
                   <text class="workspace-sheet__session-title">{{ session.title }}</text>
-                  <text v-if="session.timeText" class="workspace-sheet__session-time">{{ session.timeText }}</text>
+                  <text v-if="session.timeText" class="workspace-sheet__session-time">{{
+                    session.timeText
+                  }}</text>
                   <view
                     v-if="selectingKey === `session:${project.path}:${session.id}`"
                     class="workspace-sheet__spinner workspace-sheet__spinner--xs"
@@ -351,7 +373,9 @@ function handleDismiss() {
                   @tap="toggleShowAllSessions(project.path)"
                 >
                   <text>{{ showAllByProject[project.path] ? '收起' : '展开显示更多' }}</text>
-                  <text v-if="!showAllByProject[project.path]" class="workspace-sheet__chevron">▸</text>
+                  <text v-if="!showAllByProject[project.path]" class="workspace-sheet__chevron"
+                    >▸</text
+                  >
                 </view>
               </template>
             </view>
@@ -362,14 +386,22 @@ function handleDismiss() {
             <view class="workspace-sheet__project-row" @tap="toggleChats">
               <image class="workspace-sheet__folder" :src="CHAT_ICON.folder" mode="aspectFit" />
               <text class="workspace-sheet__project-name">对话</text>
-              <view v-if="refreshingChats" class="workspace-sheet__spinner workspace-sheet__spinner--sm" />
+              <view
+                v-if="refreshingChats"
+                class="workspace-sheet__spinner workspace-sheet__spinner--sm"
+              />
               <text class="workspace-sheet__chevron">{{ chatsExpanded ? '▾' : '▸' }}</text>
             </view>
             <view v-if="chatsExpanded" class="workspace-sheet__sessions">
-              <view v-if="loadingChats && !chats?.length" class="workspace-sheet__session-placeholder">
+              <view
+                v-if="loadingChats && !chats?.length"
+                class="workspace-sheet__session-placeholder"
+              >
                 暂无会话
               </view>
-              <view v-else-if="!chats?.length" class="workspace-sheet__session-placeholder">暂无会话</view>
+              <view v-else-if="!chats?.length" class="workspace-sheet__session-placeholder"
+                >暂无会话</view
+              >
               <template v-else>
                 <view
                   v-for="session in visibleChats"

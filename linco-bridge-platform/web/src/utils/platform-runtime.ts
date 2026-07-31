@@ -62,8 +62,9 @@ export function scheduleNextFrame(callback: () => void): void {
   // #endif
 
   const raf = resolveRequestAnimationFrame()
-  if (raf) {
-    raf.call(globalThis, callback)
+  if (typeof raf === 'function') {
+    const schedule = raf as (callback: () => void) => number
+    schedule(callback)
     return
   }
   setTimeout(callback, 16)
