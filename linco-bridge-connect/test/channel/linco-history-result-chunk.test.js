@@ -6,19 +6,14 @@ const {
   mapLocalEventToLinco,
 } = require('../../src/channel/linco/protocol');
 
-test('large history slash results are split into ordered base64 chunks', () => {
+test('large textual history slash results are split into ordered base64 chunks', () => {
   const historyData = {
     version: 3,
     rounds: [{
       user: {
-        text: '同步带大附件的 PC 历史',
-        files: [{
-          name: 'large.png',
-          mimeType: 'image/png',
-          base64: Buffer.alloc(400 * 1024, 7).toString('base64'),
-        }],
+        text: '同步包含长文本的 PC 历史',
       },
-      assistant: { text: '完成' },
+      assistant: { text: '分析结果'.repeat(100 * 1024) },
     }],
   };
   const payload = mapLocalEventToLinco({
@@ -93,14 +88,10 @@ test('linco adapter sends every large history chunk as its own envelope', () => 
     version: 3,
     rounds: [{
       user: {
-        text: '同步带大附件的 PC 历史',
-        files: [{
-          name: 'large.png',
-          mimeType: 'image/png',
-          base64: Buffer.alloc(400 * 1024, 9).toString('base64'),
-        }],
+        text: '同步包含长思考过程的 PC 历史',
       },
       assistant: { text: '完成' },
+      thinking: { text: '检查上下文'.repeat(100 * 1024) },
     }],
   };
   adapter.send(JSON.stringify({

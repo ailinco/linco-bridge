@@ -534,6 +534,10 @@ function sendClaudeCompactCommand(ws, session, config, options = {}) {
     failActiveClaudeCompaction(ws, session, config, 'superseded', 'Another Claude compaction started before the previous one completed.');
   }
 
+  session._lastWs = ws;
+  session._lastConfig = config;
+  bindClaudeOutputContext(child, ws, config);
+
   const compactionId = `claude-compact-${Date.now()}`;
   const compaction = {
     id: compactionId,
@@ -595,6 +599,10 @@ function sendClaudeQuery(input, ws, session, config) {
   const child = ensureClaudeProcess(ws, session, config);
   if (!child) return;
 
+  session._lastWs = ws;
+  session._lastConfig = config;
+  bindClaudeOutputContext(child, ws, config);
+
   const payload = buildClaudePayload(input, session, config);
   const resumeId = session.agentSessionId;
   const isFirstNewClaudeTurn = !resumeId && (session.messageCount || 0) === 0;
@@ -619,8 +627,28 @@ function sendClaudeQuery(input, ws, session, config) {
     config.logger?.error('claude stdin write failed', { sessionId: session.id, error: err.message });
     session.isTurnActive = false;
     session.currentInputForNoOutput = null;
+    clearClaudeOutputContext(child, ws);
     sendError(ws, `❌ 发送消息到 Claude 失败: ${err.message}`);
   }
+}
+
+function bindClaudeOutputContext(child, ws, config) {
+  if (!child) return;
+  child.lincoOutputContext = { ws, config };
+}
+
+function claudeOutputContext(child, session, fallbackWs, fallbackConfig) {
+  const active = child?.lincoOutputContext;
+  return {
+    ws: active?.ws || session?._lastWs || fallbackWs,
+    config: active?.config || session?._lastConfig || fallbackConfig,
+  };
+}
+
+function clearClaudeOutputContext(child, ws) {
+  if (!child?.lincoOutputContext) return;
+  if (ws && child.lincoOutputContext.ws !== ws) return;
+  child.lincoOutputContext = null;
 }
 
 function ensureClaudeProcess(ws, session, config) {
@@ -691,6 +719,8 @@ function ensureClaudeProcess(ws, session, config) {
   session.claudeProcess = child;
   session.agentProcess = child;
   session.stdoutBuffer = '';
+  child.lincoAgentSessionIdAtSpawn = resumeSessionId || null;
+  child.lincoLastStderr = '';
 
   child.stdout.on('data', (chunk) => {
     if (session.claudeProcess !== child) return;
@@ -708,7 +738,8 @@ function ensureClaudeProcess(ws, session, config) {
             session._checkingResume = true;
             const actualId = parsed.session_id;
             const expectedId = resumeSessionId;
-            config.logger?.info('claude session initialized', {
+            const output = claudeOutputContext(child, session, ws, config);
+            output.config?.logger?.info('claude session initialized', {
               sessionId: session.id,
               expectedResumeId: expectedId || '(none)',
               actualSessionId: actualId,
@@ -719,50 +750,59 @@ function ensureClaudeProcess(ws, session, config) {
       }
     }
 
-    handleClaudeStdoutData(chunk, ws, session, config);
+    handleClaudeStdoutData(chunk, child, session, ws, config);
   });
 
   child.stderr.on('data', (data) => {
     if (session.claudeProcess !== child) return;
     const errText = data.toString().trim();
     if (errText) {
+      child.lincoLastStderr = `${child.lincoLastStderr}\n${errText}`.trim().slice(-2000);
       config.logger?.warn('claude stderr', { sessionId: session.id, stderr: errText });
     }
   });
 
   child.on('close', (code) => {
-    config.logger?.info('claude process closed', { sessionId: session.id, code });
     if (session.claudeProcess !== child) return;
+    const output = claudeOutputContext(child, session, ws, config);
+    const outputWs = output.ws;
+    const outputConfig = output.config || config;
+    outputConfig.logger?.info('claude process closed', { sessionId: session.id, code });
+    clearClaudeOutputContext(child, outputWs);
     session.claudeProcess = null;
     if (session.claudeCompaction) {
-      failActiveClaudeCompaction(ws, session, config, 'process_closed', `Claude process exited during context compaction. Exit code: ${code}`);
+      failActiveClaudeCompaction(outputWs, session, outputConfig, 'process_closed', `Claude process exited during context compaction. Exit code: ${code}`);
       return;
     }
-    flushAssistantText(ws, session);
+    flushAssistantText(outputWs, session);
     if (session.isTurnActive) {
       session.isTurnActive = false;
       session.currentInputForNoOutput = null;
       const message = code === 0 || code === null ? '⚠️ Claude 会话已结束。' : `❌ Claude 进程退出，退出码: ${code}`;
-      sendError(ws, message);
-      sendTurnEnd(ws, session, 'error', { error: message });
-      drainMessageQueue(ws, session, config);
+      sendError(outputWs, message);
+      sendTurnEnd(outputWs, session, 'error', { error: message });
+      drainMessageQueue(outputWs, session, outputConfig);
     }
   });
 
   child.on('error', (err) => {
-    config.logger?.error('claude process spawn error', { sessionId: session.id, error: err.message });
     if (session.claudeProcess !== child) return;
+    const output = claudeOutputContext(child, session, ws, config);
+    const outputWs = output.ws;
+    const outputConfig = output.config || config;
+    outputConfig.logger?.error('claude process spawn error', { sessionId: session.id, error: err.message });
+    clearClaudeOutputContext(child, outputWs);
     session.claudeProcess = null;
     if (session.claudeCompaction) {
-      failActiveClaudeCompaction(ws, session, config, 'process_unavailable', err.message);
+      failActiveClaudeCompaction(outputWs, session, outputConfig, 'process_unavailable', err.message);
       return;
     }
     session.isTurnActive = false;
     session.currentInputForNoOutput = null;
-    flushAssistantText(ws, session);
+    flushAssistantText(outputWs, session);
     const message = `❌ 无法启动 Claude: ${err.message}\n请确认已安装 Claude Code 并设置好 API 密钥。`;
-    sendError(ws, message);
-    sendTurnEnd(ws, session, 'error', { error: message });
+    sendError(outputWs, message);
+    sendTurnEnd(outputWs, session, 'error', { error: message });
   });
 
   return child;
@@ -792,17 +832,18 @@ function writeClaudeJson(session, payload) {
   child.stdin.write(JSON.stringify(payload) + '\n');
 }
 
-function handleClaudeStdoutData(chunk, ws, session, config) {
+function handleClaudeStdoutData(chunk, child, session, fallbackWs, fallbackConfig) {
   session.stdoutBuffer += chunk.toString();
   const lines = session.stdoutBuffer.split('\n');
   session.stdoutBuffer = lines.pop() || '';
 
   for (const line of lines) {
     if (!line.trim()) continue;
+    const output = claudeOutputContext(child, session, fallbackWs, fallbackConfig);
     try {
-      handleClaudeMessage(JSON.parse(line), ws, session, config);
+      handleClaudeMessage(JSON.parse(line), output.ws, session, output.config || fallbackConfig, child);
     } catch (err) {
-      config.logger?.warn('claude stream-json parse failed', { sessionId: session.id, error: err.message });
+      (output.config || fallbackConfig).logger?.warn('claude stream-json parse failed', { sessionId: session.id, error: err.message });
     }
   }
 }
@@ -815,8 +856,8 @@ async function warmup(ws, session, config) {
   return { supported: true, process: 'claude' };
 }
 
-function handleClaudeMessage(parsed, ws, session, config) {
-  updateClaudeSessionId(parsed, session);
+function handleClaudeMessage(parsed, ws, session, config, child = session.claudeProcess) {
+  updateClaudeSessionId(parsed, session, child, config);
 
   if (session.claudeCompaction) {
     handleClaudeCompactionMessage(parsed, ws, session, config);
@@ -837,7 +878,23 @@ function handleClaudeMessage(parsed, ws, session, config) {
       flushAssistantText(ws, session);
       if (session.streamState.assistantStarted) {
         send(ws, 'assistant_end');
-      } else {
+      }
+      const resultError = claudeResultErrorMessage(parsed, child);
+      if (resultError) {
+        config.logger?.warn('claude turn failed', {
+          sessionId: session.id,
+          subtype: parsed.subtype || '(none)',
+          error: resultError,
+        });
+        sendError(ws, resultError);
+        sendTurnEnd(ws, session, 'error', { error: resultError });
+        session.isTurnActive = false;
+        session.currentInputForNoOutput = null;
+        clearClaudeOutputContext(child, ws);
+        drainMessageQueue(ws, session, config);
+        break;
+      }
+      if (!session.streamState.assistantStarted) {
         sendSystem(ws, noOutputMessage(session));
       }
       if (parsed.usage) {
@@ -862,6 +919,7 @@ function handleClaudeMessage(parsed, ws, session, config) {
       sendTurnEnd(ws, session);
       session.isTurnActive = false;
       session.currentInputForNoOutput = null;
+      clearClaudeOutputContext(child, ws);
       drainMessageQueue(ws, session, config);
       break;
     case 'control_request':
@@ -959,6 +1017,7 @@ function completeClaudeCompaction(parsed, ws, session, config) {
     result: resultText.slice(0, 160),
   });
   sendTurnEnd(ws, session);
+  clearClaudeOutputContext(session.claudeProcess, ws);
   drainMessageQueue(ws, session, config);
 }
 
@@ -988,6 +1047,7 @@ function failActiveClaudeCompaction(ws, session, config, code, message) {
     durationMs,
   });
   sendTurnEnd(ws, session, 'error', { error: message });
+  clearClaudeOutputContext(session.claudeProcess, ws);
   drainMessageQueue(ws, session, config);
   return true;
 }
@@ -1045,17 +1105,50 @@ function noOutputMessage(session) {
   return '✅ 操作完成（无输出）';
 }
 
-function updateClaudeSessionId(parsed, session) {
-  if (parsed.session_id) {
-    persistAgentSessionId(session, parsed.session_id);
-    emitClaudeAgentSession(session, parsed.session_id);
+function updateClaudeSessionId(parsed, session, child, config) {
+  const nextId = String(parsed.session_id || '').trim();
+  if (!nextId) return false;
+
+  const currentId = String(session.agentSessionId || '').trim();
+  const idAtSpawn = String(child?.lincoAgentSessionIdAtSpawn || '').trim();
+  const sessionChangedAfterSpawn = currentId !== idAtSpawn;
+  if (sessionChangedAfterSpawn && nextId !== currentId) {
+    config?.logger?.warn('claude session update ignored from stale process', {
+      sessionId: session.id,
+      processResumeId: idAtSpawn || '(none)',
+      currentAgentSessionId: currentId || '(none)',
+      receivedAgentSessionId: nextId,
+    });
+    return false;
   }
+
+  persistAgentSessionId(session, nextId);
+  emitClaudeAgentSession(session, nextId);
+  return true;
+}
+
+function claudeResultErrorMessage(parsed, child) {
+  const subtype = String(parsed?.subtype || '').trim();
+  if (parsed?.is_error !== true && (!subtype || subtype === 'success')) return '';
+
+  const detail = [
+    parsed?.result,
+    parsed?.error?.message,
+    typeof parsed?.error === 'string' ? parsed.error : '',
+    child?.lincoLastStderr,
+  ]
+    .map(value => String(value || '').trim())
+    .find(Boolean);
+  return detail
+    ? `❌ Claude 执行失败: ${detail.slice(0, 1200)}`
+    : `❌ Claude 执行失败${subtype ? ` (${subtype})` : ''}`;
 }
 
 function emitClaudeAgentSession(session, sessionId = session?.agentSessionId) {
   const agentSessionId = String(sessionId || '').trim();
   if (!agentSessionId) return false;
-  return sendAgentSession(session?._lastWs, session, {
+  const output = claudeOutputContext(session?.claudeProcess, session);
+  return sendAgentSession(output.ws, session, {
     agentType: 'claude',
     agentSessionId,
   });

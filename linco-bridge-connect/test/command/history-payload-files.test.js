@@ -11,18 +11,24 @@ const {
   parseClaudeHistoryRounds,
   parseCodexHistoryRounds,
   parseRecentHistoryRounds,
+  readClaudeSessionSummary,
 } = require('../../src/command/history/readers');
 
-test('buildHistoryPayload includes user and assistant files', () => {
+test('buildHistoryPayload excludes file contents and keeps clickable file paths in text', () => {
+  const fileBase64 = Buffer.alloc(2 * 1024 * 1024, 7).toString('base64');
+  const assistantText = '文件已生成：[out.png](/tmp/out.png)';
   const payload = buildHistoryPayload('claude', 'sess-1', 10, [{
     user: 'see image',
-    userFiles: [{ name: 'photo.png', mimeType: 'image/png', base64: 'abc' }],
-    assistant: 'done',
-    assistantFiles: [{ name: 'out.png', mimeType: 'image/png', base64: 'def' }],
+    userFiles: [{ name: 'photo.png', mimeType: 'image/png', base64: fileBase64 }],
+    assistant: assistantText,
+    assistantFiles: [{ name: 'out.png', mimeType: 'image/png', base64: fileBase64 }],
   }]);
 
-  assert.equal(payload.rounds[0].user.files[0].name, 'photo.png');
-  assert.equal(payload.rounds[0].assistant.files[0].base64, 'def');
+  assert.equal(Object.prototype.hasOwnProperty.call(payload.rounds[0].user, 'files'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(payload.rounds[0].assistant, 'files'), false);
+  assert.equal(payload.rounds[0].assistant.text, assistantText);
+  assert.doesNotMatch(JSON.stringify(payload), new RegExp(fileBase64.slice(0, 128)));
+  assert.ok(Buffer.byteLength(JSON.stringify(payload), 'utf8') < 1024);
 });
 
 test('history thinking flag is opt-in', () => {
@@ -374,6 +380,195 @@ test('extractClaudeContentFiles reads image blocks', () => {
   assert.equal(files[0].base64, 'abc');
 });
 
+test('Claude history strips IDE context blocks while preserving the user prompt and identity', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-claude-control-block-'));
+  const transcriptPath = path.join(tempDir, 'history.jsonl');
+  const userTimestamp = '2026-07-31T09:10:08.175Z';
+  const ideContext = [
+    '<ide_opened_file>The user opened the file',
+    '/Users/admin/work/project/demo.dart in the IDE.',
+    'This may or may not be related to the current task.</ide_opened_file>',
+  ].join('\n');
+  const records = [
+    {
+      type: 'user',
+      timestamp: userTimestamp,
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text: ideContext },
+          { type: 'text', text: '在吗' },
+        ],
+      },
+    },
+    {
+      type: 'assistant',
+      timestamp: '2026-07-31T09:10:09.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: '在的。' }],
+      },
+    },
+  ];
+  fs.writeFileSync(transcriptPath, records.map(JSON.stringify).join('\n'));
+
+  try {
+    const rounds = parseClaudeHistoryRounds(transcriptPath);
+    const payload = buildHistoryPayload('claude', 'desktop-session', 1, rounds);
+    const previousPayload = buildHistoryPayload('claude', 'desktop-session', 1, [{
+      ordinal: 1,
+      user: `${ideContext}\n在吗`,
+      userTimestamp,
+      assistant: '在的。',
+      assistantTimestamp: '2026-07-31T09:10:09.000Z',
+    }]);
+
+    assert.equal(rounds.length, 1);
+    assert.equal(rounds[0].user, '在吗');
+    assert.equal(payload.rounds[0].user.text, '在吗');
+    assert.equal(payload.rounds[0].roundId, previousPayload.rounds[0].roundId);
+    assert.equal(
+      payload.rounds[0].user.messageId,
+      previousPayload.rounds[0].user.messageId,
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('Claude local command records do not consume recent history pagination', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-claude-local-command-'));
+  const transcriptPath = path.join(tempDir, 'history.jsonl');
+  const userRecord = (text, second) => ({
+    type: 'user',
+    timestamp: `2026-07-31T09:10:${String(second).padStart(2, '0')}.000Z`,
+    message: { role: 'user', content: [{ type: 'text', text }] },
+  });
+  const assistantRecord = (text, second) => ({
+    type: 'assistant',
+    timestamp: `2026-07-31T09:10:${String(second).padStart(2, '0')}.500Z`,
+    message: { role: 'assistant', content: [{ type: 'text', text }] },
+  });
+  const records = [
+    userRecord('问题零', 0),
+    assistantRecord('回答零', 1),
+    userRecord('问题一', 2),
+    assistantRecord('回答一', 3),
+    userRecord('问题二', 4),
+    assistantRecord('回答二', 5),
+    { ...userRecord('<local-command-caveat>Caveat: local command output.</local-command-caveat>', 6), isMeta: true },
+    userRecord([
+      '<command-name>/exit</command-name>',
+      '<command-message>exit</command-message>',
+      '<command-args></command-args>',
+    ].join('\n'), 7),
+    userRecord('<local-command-stdout>Catch you later!</local-command-stdout>', 8),
+  ];
+  fs.writeFileSync(transcriptPath, `${records.map(JSON.stringify).join('\n')}\n`);
+
+  try {
+    const result = parseRecentHistoryRounds(transcriptPath, {
+      agentType: 'claude',
+      sessionId: 'desktop-session',
+      limit: 2,
+    });
+
+    assert.deepEqual(result.rounds.map((round) => round.user), ['问题一', '问题二']);
+    assert.deepEqual(result.rounds.map((round) => round.assistant), ['回答一', '回答二']);
+    assert.equal(result.syncMeta.returnedRounds, 2);
+    assert.equal(result.pageInfo.hasMore, true);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('Claude session summary skips control-only records', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-claude-summary-control-'));
+  const transcriptPath = path.join(tempDir, 'history.jsonl');
+  const records = [
+    {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: '<local-command-stdout>Done</local-command-stdout>' }],
+      },
+    },
+    {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text: '<ide_opened_file>demo.dart</ide_opened_file>' },
+          { type: 'text', text: '修复登录问题' },
+        ],
+      },
+    },
+  ];
+  fs.writeFileSync(transcriptPath, records.map(JSON.stringify).join('\n'));
+
+  try {
+    assert.deepEqual(readClaudeSessionSummary(transcriptPath), {
+      firstMessage: '修复登录问题',
+      lastMessage: '修复登录问题',
+      title: '修复登录问题',
+    });
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('Claude session summary title matches the latest CLI last-prompt', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-claude-summary-title-'));
+  const transcriptPath = path.join(tempDir, 'history.jsonl');
+  const records = [
+    {
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: '你好' }] },
+    },
+    { type: 'last-prompt', lastPrompt: '你好' },
+    ...Array.from({ length: 100 }, (_, index) => ({
+      type: 'attachment',
+      data: { index },
+    })),
+    {
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: '你能做什么' }] },
+    },
+    {
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: '我可以帮助你。' }] },
+    },
+    { type: 'last-prompt', lastPrompt: '你能做什么' },
+  ];
+  fs.writeFileSync(transcriptPath, `${records.map(JSON.stringify).join('\n')}\n`);
+
+  try {
+    assert.deepEqual(readClaudeSessionSummary(transcriptPath), {
+      firstMessage: '你好',
+      lastMessage: '你能做什么',
+      title: '你能做什么',
+    });
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('Claude history preserves ordinary text that only mentions a control tag', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-claude-control-example-'));
+  const transcriptPath = path.join(tempDir, 'history.jsonl');
+  const prompt = '请解释代码里的 <ide_opened_file>demo</ide_opened_file> 字符串';
+  fs.writeFileSync(transcriptPath, JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text: prompt }] },
+  }));
+
+  try {
+    assert.equal(parseClaudeHistoryRounds(transcriptPath)[0].user, prompt);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('parseClaudeHistoryRounds includes thinking only when requested', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-claude-history-thinking-'));
   const transcriptPath = path.join(tempDir, 'history.jsonl');
@@ -400,7 +595,7 @@ test('parseClaudeHistoryRounds includes thinking only when requested', () => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-test('extractCodexMentionedUserFiles reads clipboard image paths when file exists', () => {
+test('extractCodexMentionedUserFiles keeps metadata without reading file contents', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-history-'));
   const imagePath = path.join(tempDir, 'demo.png');
   fs.writeFileSync(imagePath, Buffer.from('fake-image'));
@@ -417,6 +612,9 @@ test('extractCodexMentionedUserFiles reads clipboard image paths when file exist
   assert.equal(files.length, 1);
   assert.equal(files[0].name, 'demo.png');
   assert.equal(files[0].mimeType, 'image/png');
+  assert.equal(files[0].path, imagePath);
+  assert.equal(files[0].size, Buffer.byteLength('fake-image'));
+  assert.equal(Object.prototype.hasOwnProperty.call(files[0], 'base64'), false);
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 

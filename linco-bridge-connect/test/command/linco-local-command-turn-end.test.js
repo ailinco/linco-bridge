@@ -1873,6 +1873,7 @@ test('history-reload waits for reload warmup before returning history', async ()
   let stopped = false;
   let warmed = 0;
   const warmupResolvers = [];
+  const warmupSnapshots = [];
   const flush = () => new Promise(resolve => setImmediate(resolve));
 
   require.cache[agentRunnerPath] = {
@@ -1884,8 +1885,12 @@ test('history-reload waits for reload warmup before returning history', async ()
       resolvePendingDanger() { return false; },
       resolvePendingPermission() { return false; },
       stopAgentProcess() { stopped = true; },
-      warmupAgentProcess() {
+      warmupAgentProcess(_ws, warmupSession) {
         warmed += 1;
+        warmupSnapshots.push({
+          workspace: warmupSession.workspace,
+          agentSessionId: warmupSession.agentSessionId,
+        });
         return new Promise(resolve => warmupResolvers.push(resolve));
       },
     },
@@ -1955,6 +1960,10 @@ test('history-reload waits for reload warmup before returning history', async ()
       handleSlashCommandWithMock(`/history-reload --project "${explicitProject}" --session ${explicitSessionId} 1`, explicitWs, explicitSession, { homeDir }),
       true,
     );
+    assert.deepStrictEqual(warmupSnapshots.at(-1), {
+      workspace: explicitProject,
+      agentSessionId: explicitSessionId,
+    });
     assert.strictEqual(explicitWs.sent.some(item => item.type === 'slash_command_result'), false);
     warmupResolvers.shift()({ supported: false });
     await flush();
@@ -1984,6 +1993,10 @@ test('history-reload waits for reload warmup before returning history', async ()
       handleSlashCommandWithMock(`/history-reload --project "${explicitProject}" --session ${explicitSessionId} 1`, switchWs, switchSession, { homeDir }),
       true,
     );
+    assert.deepStrictEqual(warmupSnapshots.at(-1), {
+      workspace: explicitProject,
+      agentSessionId: explicitSessionId,
+    });
     assert.strictEqual(switchWs.sent.some(item => item.type === 'slash_command_result'), false);
     warmupResolvers.shift()({ supported: false });
     await flush();

@@ -106,3 +106,5 @@ Codex 额外支持：
 所有本地命令回合都应以 `turn_end` 结束。前端收到 `turn_end` 后应停止当前输入的 running 状态。
 超大 `history` 结果会先以多个 `slash_command_result_chunk` 分片发送；远端必须在
 `turn_end` 前完成 Base64 重组与字节校验，再按普通 `slash_command_result` 处理。
+`history` 的 `rounds[]` 不包含用户或 Assistant 文件正文，也不返回文件 Base64；
+正文中的 Markdown 文件路径保持可点击，用户点击后再通过 `/get <路径>` 按需取文件。

@@ -143,6 +143,10 @@
 `thinking` 字段，用于展示该回合模型过程输出；未带参数时历史 payload
 保持原结构。工具输出不会进入 `thinking`。
 
+history payload 不返回 `user.files`、`assistant.files` 或文件 Base64。回复正文中的
+Markdown 文件路径会原样保留，远端 IM 只在用户点击该路径后发送 `/get <路径>`，
+由连接器届时校验并读取文件。历史解析阶段只允许读取文件元数据，不应预读文件正文。
+
 当 history 的 `data` 序列化后超过 256 KiB，连接器不会发送单个超大
 `slash_command_result`，而是按顺序发送 `slash_command_result_chunk`。每个分片
 保留相同的 `requestId`、`streamId`、`sessionKey` 和 `command: "history"`，并提供
@@ -175,7 +179,7 @@ Agent 适配器可能发送 `permission_request` 或 `danger_warning`。远端 I
 
 ## 文件下发
 
-Agent 生成文件时通常先在回复中返回文件路径引用。Agent 可见提示词只要求返回 `[filename.ext](absolute-local-path)` 这类 Markdown 绝对路径引用，不暴露 `/get` 命令或下发实现细节。远端 IM 点击引用后可以发送 `/get <路径>`，连接器校验路径、文件类型和大小后返回 `outbound_message`，其中包含 `mediaBase64` 或 `files`。
+Agent 生成文件时通常先在回复中返回文件路径引用。Agent 可见提示词只要求返回 `[filename.ext](absolute-local-path)` 这类 Markdown 绝对路径引用，不暴露 `/get` 命令或下发实现细节。历史同步只传递该路径文本，不携带文件正文。远端 IM 点击引用后可以发送 `/get <路径>`，连接器校验路径、文件类型和大小后才读取文件，并返回包含 `mediaBase64` 或 `files` 的 `outbound_message`。
 
 连接器只应下发当前工作目录、`/project` 当前列出的项目、会话运行目录或附件目录内的普通非隐藏文件。相对路径保持当前会话目录语义，绝对路径按真实路径校验归属并拒绝软链接逃逸；默认拒绝 `.env`、`.git/config`、`.ssh/*` 等隐藏路径。
 

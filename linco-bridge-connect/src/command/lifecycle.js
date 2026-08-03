@@ -56,15 +56,17 @@ function handleHistoryReload(rawArg, ws, session, config = {}) {
     return completeLocalCommand(ws, session);
   }
 
+  const trackingWs = trackHistoryResult(ws, { defer: true });
+  handleHistory(rawArg, trackingWs, session, {
+    homeDir: config?.homeDir,
+    bindExplicitHistorySession: true,
+    allowExplicitHistorySessionSwitch: true,
+    historyReload: true,
+  });
+
   runReload(ws, session, config)
     .then(() => {
-      const trackingWs = trackHistoryResult(ws);
-      handleHistory(rawArg, trackingWs, session, {
-        homeDir: config?.homeDir,
-        bindExplicitHistorySession: true,
-        allowExplicitHistorySessionSwitch: true,
-        historyReload: true,
-      });
+      trackingWs.flush();
     })
     .finally(() => {
       completeLocalCommand(ws, session);
@@ -83,7 +85,8 @@ function isSessionBusyForHistoryReload(session) {
   );
 }
 
-function trackHistoryResult(ws) {
+function trackHistoryResult(ws, options = {}) {
+  const pending = [];
   return {
     ...ws,
     linco: ws?.linco,
@@ -95,7 +98,16 @@ function trackHistoryResult(ws) {
           this.sawHistoryResult = true;
         }
       } catch {}
+      if (options.defer) {
+        pending.push(raw);
+        return;
+      }
       return ws.send(raw);
+    },
+    flush() {
+      for (const raw of pending.splice(0)) {
+        ws.send(raw);
+      }
     },
   };
 }

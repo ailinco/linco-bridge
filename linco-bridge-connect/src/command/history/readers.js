@@ -32,25 +32,73 @@ const INTERNAL_HINT_PATTERN = new RegExp(
   `\\s*(?:${escapeRegExp(agentPromptInternals.BRIDGE_INPUT_HINT_MARKER)}|System note: The user is asking to send or deliver a file\\/image\\.|系统提示：用户正在要求发送或获取文件\\/图片。)`,
   'u'
 );
+const CLAUDE_CONTROL_TEXT_PATTERNS = [
+  /^<ide_opened_file>[\s\S]*<\/ide_opened_file>$/u,
+  /^<local-command-caveat>[\s\S]*<\/local-command-caveat>$/u,
+  /^<local-command-stdout>[\s\S]*<\/local-command-stdout>$/u,
+  /^<local-command-stderr>[\s\S]*<\/local-command-stderr>$/u,
+  /^<command-name>[\s\S]*?<\/command-name>\s*<command-message>[\s\S]*?<\/command-message>\s*<command-args>[\s\S]*?<\/command-args>$/u,
+];
+const CLAUDE_LEADING_CONTROL_TEXT_PATTERNS = [
+  /^<ide_opened_file>[\s\S]*?<\/ide_opened_file>[ \t]*(?:\r?\n)+/u,
+  /^<local-command-caveat>[\s\S]*?<\/local-command-caveat>[ \t]*(?:\r?\n)+/u,
+  /^<local-command-stdout>[\s\S]*?<\/local-command-stdout>[ \t]*(?:\r?\n)+/u,
+  /^<local-command-stderr>[\s\S]*?<\/local-command-stderr>[ \t]*(?:\r?\n)+/u,
+  /^<command-name>[\s\S]*?<\/command-name>\s*<command-message>[\s\S]*?<\/command-message>\s*<command-args>[\s\S]*?<\/command-args>[ \t]*(?:\r?\n)+/u,
+];
 
 function readClaudeSessionSummary(filePath) {
   const result = { firstMessage: '', lastMessage: '', title: '' };
   readJsonlRecordsUntil(filePath, SESSION_SUMMARY_SCAN_LIMIT, item => {
-    if (item?.type === 'user') {
-      const text = extractTextFromMessageContent(item.message?.content || item.content);
+    if (isClaudeActualUserRecord(item)) {
+      const text = extractClaudeUserPrompt(item);
       if (text) {
-        if (!result.firstMessage) result.firstMessage = text;
-        result.lastMessage = text;
+        result.firstMessage = text;
         return false;
       }
     }
-    if (item?.type === 'last-prompt' && typeof item.lastPrompt === 'string' && item.lastPrompt.trim()) {
-      result.lastMessage = item.lastPrompt.trim();
-    }
     return true;
   });
-  result.title = result.firstMessage || result.lastMessage;
+  result.lastMessage = readClaudeLatestPrompt(filePath) || result.firstMessage;
+  result.title = result.lastMessage || result.firstMessage;
   return result;
+}
+
+function readClaudeLatestPrompt(filePath) {
+  let fd;
+  try {
+    fd = fs.openSync(filePath, 'r');
+    const stat = fs.fstatSync(fd);
+    const recent = readRecentAscendingRecords(
+      fd,
+      stat.size,
+      1,
+      'claude',
+    ).records;
+    let fallback = '';
+
+    for (let index = recent.length - 1; index >= 0; index--) {
+      const item = recent[index];
+      if (item?.type === 'last-prompt') {
+        const text = sanitizeClaudeHistoryUserText(item.lastPrompt);
+        if (text) return text;
+      }
+      if (!fallback && isClaudeActualUserRecord(item)) {
+        fallback = extractClaudeUserPrompt(item);
+      }
+    }
+    return fallback;
+  } catch {
+    return '';
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Ignore close failures while reading local history.
+      }
+    }
+  }
 }
 
 function isCodexSubagentSource(threadSource, source) {
@@ -667,6 +715,7 @@ function parseClaudeHistoryRecords(records, options = {}) {
       current = {
         ordinal: rounds.length + 1,
         user: userPayload.text,
+        identityUser: userPayload.rawText,
         userFiles: userPayload.files,
         assistant: '',
         assistantFiles: [],
@@ -752,20 +801,52 @@ function extractClaudeContentFiles(content) {
 function extractClaudeUserPayload(item) {
   const content = item?.message?.content ?? item?.content;
   if (typeof content === 'string') {
-    return { text: content.trim(), files: [] };
+    const rawText = content.trim();
+    return {
+      text: sanitizeClaudeHistoryUserText(rawText),
+      rawText,
+      files: [],
+    };
   }
   if (!Array.isArray(content)) {
-    return { text: '', files: [] };
+    return { text: '', rawText: '', files: [] };
   }
-  const text = content
+  const textBlocks = content
     .filter(block => block?.type === 'text')
-    .map(block => block.text || '')
+    .map(block => stringOrEmpty(block.text));
+  const rawText = textBlocks
+    .join('\n')
+    .trim();
+  const text = textBlocks
+    .map(sanitizeClaudeHistoryUserText)
+    .filter(Boolean)
     .join('\n')
     .trim();
   return {
     text,
+    rawText,
     files: extractClaudeContentFiles(content),
   };
+}
+
+function sanitizeClaudeHistoryUserText(value) {
+  let text = stringOrEmpty(value).trim();
+  if (!text || CLAUDE_CONTROL_TEXT_PATTERNS.some(pattern => pattern.test(text))) {
+    return '';
+  }
+
+  let changed = true;
+  while (changed && text) {
+    changed = false;
+    for (const pattern of CLAUDE_LEADING_CONTROL_TEXT_PATTERNS) {
+      const stripped = text.replace(pattern, '').trimStart();
+      if (stripped === text) continue;
+      text = stripped;
+      changed = true;
+      break;
+    }
+  }
+  return text.trim();
 }
 
 function extractClaudeUserPrompt(item) {
@@ -824,7 +905,8 @@ function readLocalHistoryFileAttachment(filePath, maxBytes = 4 * 1024 * 1024) {
     return {
       name,
       mimeType: mimeFromFilename(name),
-      base64: fs.readFileSync(resolved).toString('base64'),
+      path: resolved,
+      size: stat.size,
     };
   } catch {
     return null;

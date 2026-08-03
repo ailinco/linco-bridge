@@ -76,6 +76,7 @@ async function runOpenClawTurn(input, ws, session, config) {
   session.sawPartialAssistantText = false;
   session._lastWs = ws;
   session._lastConfig = config;
+  bindOpenClawOutputContext(session, ws, config);
   startAssistantReplyLog(session, config, { agentType: 'openclaw' });
   resetOpenClawAssistantText(session);
 
@@ -152,14 +153,42 @@ async function ensureOpenClawClient(session, agentConfig, gatewayUrl, config) {
   session.openclawClient = client;
   session.openclawGatewayUrl = gatewayUrl;
   session.openclawUnsubscribeEvents = client.onEvent((event, payload, frame) => {
-    handleOpenClawEvent(event, payload, frame, session._lastWs || session.ws, session, session._lastConfig || config);
+    routeOpenClawGatewayEvent(event, payload, frame, session, config);
   });
   session.openclawUnsubscribeClose = client.onClose(err => {
-    handleOpenClawGatewayClose(err, session._lastWs || session.ws, session, session._lastConfig || config);
+    routeOpenClawGatewayClose(err, session, config);
   });
   session.agentProcess = createOpenClawProcessHandle(session, client);
   await client.connect();
   return client;
+}
+
+function bindOpenClawOutputContext(session, ws, config) {
+  session.openclawOutputContext = { ws, config };
+}
+
+function openClawOutputContext(session, fallbackConfig) {
+  const active = session?.openclawOutputContext;
+  return {
+    ws: active?.ws || session?._lastWs || session?.ws,
+    config: active?.config || session?._lastConfig || fallbackConfig || {},
+  };
+}
+
+function clearOpenClawOutputContext(session, ws) {
+  if (!session?.openclawOutputContext) return;
+  if (ws && session.openclawOutputContext.ws !== ws) return;
+  session.openclawOutputContext = null;
+}
+
+function routeOpenClawGatewayEvent(event, payload, frame, session, fallbackConfig) {
+  const output = openClawOutputContext(session, fallbackConfig);
+  handleOpenClawEvent(event, payload, frame, output.ws, session, output.config);
+}
+
+function routeOpenClawGatewayClose(err, session, fallbackConfig) {
+  const output = openClawOutputContext(session, fallbackConfig);
+  handleOpenClawGatewayClose(err, output.ws, session, output.config);
 }
 
 async function ensureOpenClawSession(client, session, agentId, input, agentConfig) {
@@ -309,6 +338,7 @@ function finishTurn(ws, session, config, options = {}) {
   clearPendingPermissions(session, 'openclaw');
   flushOpenClawAssistantText(ws, session);
   resetOpenClawAssistantText(session);
+  clearOpenClawOutputContext(session, ws);
   if (typeof resolve === 'function') resolve();
   if (drain) drainQueue(ws, session, config);
 }
@@ -555,8 +585,6 @@ async function getOrCreateClientForResponse(session, config) {
 }
 
 function compactOpenClawContext(ws, session, config, options = {}) {
-  session._lastWs = ws;
-  session._lastConfig = config;
   const nativeCommand = options.nativeCommand || '/compact';
   const trigger = options.trigger || 'manual';
 
@@ -570,6 +598,8 @@ function compactOpenClawContext(ws, session, config, options = {}) {
     return true;
   }
 
+  session._lastWs = ws;
+  session._lastConfig = config;
   if (session.openclawCompaction && !session.openclawCompaction.completed) {
     failActiveOpenClawCompaction(ws, session, config, 'superseded', 'Another OpenClaw context compaction started before the previous one completed.');
   }
@@ -584,8 +614,6 @@ function compactOpenClawContext(ws, session, config, options = {}) {
 }
 
 function modelOpenClawContext(ws, session, config, options = {}) {
-  session._lastWs = ws;
-  session._lastConfig = config;
   const command = options.command || 'show';
 
   if (session.isTurnActive || (session.openclawCompaction && !session.openclawCompaction.completed)) {
@@ -603,6 +631,8 @@ function modelOpenClawContext(ws, session, config, options = {}) {
     return true;
   }
 
+  session._lastWs = ws;
+  session._lastConfig = config;
   if (command === 'list') {
     sendOpenClawModelList(ws, session, config);
     return true;
@@ -1410,6 +1440,8 @@ module.exports = {
     isSessionKeyForAgent,
     handleOpenClawGatewayClose,
     handleOpenClawEvent,
+    bindOpenClawOutputContext,
+    routeOpenClawGatewayEvent,
     armOpenClawTurnTimeout,
     clearOpenClawTurnTimeout,
     compactOpenClawContext,
