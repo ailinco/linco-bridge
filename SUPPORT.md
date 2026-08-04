@@ -65,3 +65,4 @@ Enterprise deployment, custom adapters, integration consulting, and contractual 
 社区支持尽力而为。项目不承诺固定可用率、响应时间、修复时间、赔偿或对第三方工具的永久兼容。
 
 企业部署、定制 Adapter、集成咨询和合同支持不属于社区支持范围。
+
