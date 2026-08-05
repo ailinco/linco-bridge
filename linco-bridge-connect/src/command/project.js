@@ -200,14 +200,26 @@ function knownProjectCandidates(session, options = {}) {
   const homeDir = options.homeDir || os.homedir();
   if (agentType === 'codex') {
     const stateProjects = normalizeKnownProjectCandidates(collectCodexStateProjects(homeDir), homeDir, agentType);
-    if (stateProjects.length > 0) return stateProjects.slice(0, 20);
-    return normalizeKnownProjectCandidates(collectCodexSessionProjects(homeDir), homeDir, agentType).slice(0, 20);
+    if (stateProjects.length > 0) return limitKnownProjects(stateProjects, options.limit);
+    return limitKnownProjects(
+      normalizeKnownProjectCandidates(collectCodexSessionProjects(homeDir), homeDir, agentType),
+      options.limit,
+    );
   }
 
   const candidates = agentType === 'claude'
       ? collectClaudeKnownProjects(homeDir)
       : [];
-  return normalizeKnownProjectCandidates(candidates, homeDir, agentType).slice(0, 20);
+  return limitKnownProjects(
+    normalizeKnownProjectCandidates(candidates, homeDir, agentType),
+    options.limit,
+  );
+}
+
+function limitKnownProjects(projects, limit) {
+  return Number.isInteger(limit) && limit >= 0
+    ? projects.slice(0, limit)
+    : projects;
 }
 
 function collectClaudeKnownProjects(homeDir) {

@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { ensureDir } = require('../config');
+const { clearHistoryFileAuthorization } = require('./historyFileAccess');
 const { createTextStreamBuffer, resetTextStream } = require('./streamBuffer');
 
 const MAX_EXTERNAL_SESSION_ID_LENGTH = 256;
@@ -292,6 +293,7 @@ function persistAgentSessionId(session, agentSessionId) {
   const nextId = String(agentSessionId || '').trim();
   if (!nextId || session.agentSessionId === nextId) return;
   const isNew = !session.agentSessionId;
+  clearHistoryFileAuthorization(session);
   session.agentSessionId = nextId;
   if (isNew) {
     recordAgentSession(session, extractText(session.currentInputForNoOutput));
@@ -301,6 +303,7 @@ function persistAgentSessionId(session, agentSessionId) {
 }
 
 function clearPersistedAgentSession(session) {
+  clearHistoryFileAuthorization(session);
   session.agentSessionId = null;
   saveSessionMetadata(session);
 }

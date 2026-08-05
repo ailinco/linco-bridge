@@ -1,6 +1,10 @@
 
 const os = require('os');
 const path = require('path');
+const {
+  clearHistoryFileAuthorization,
+  registerHistoryPayloadFiles,
+} = require('../../core/historyFileAccess');
 const { createAgentSessionEntry, saveSessionMetadata } = require('../../core/session');
 const { send, sendError, sendSystem } = require('../../core/protocol');
 const { rejectLockedIdentityChange, sessionIdentityLocked } = require('../agentSelection');
@@ -155,6 +159,7 @@ function handleBind(rawArg, ws, session, options = {}) {
 
   if (!session.agentSessionHistory) session.agentSessionHistory = [];
   for (const entry of session.agentSessionHistory) entry.isActive = false;
+  clearHistoryFileAuthorizationIfIdentityChanges(session, workspace, matched.id);
   session.workspace = workspace;
   session.agentSessionId = matched.id;
   const existing = session.agentSessionHistory.find(entry => entry.id === matched.id);
@@ -179,6 +184,7 @@ function bindMatchedSession(ws, session, matched, workspace, label = 'PC session
 function activateMatchedSession(session, matched, workspace) {
   if (!session.agentSessionHistory) session.agentSessionHistory = [];
   for (const entry of session.agentSessionHistory) entry.isActive = false;
+  clearHistoryFileAuthorizationIfIdentityChanges(session, workspace, matched.id);
   session.workspace = workspace;
   session.agentSessionId = matched.id;
   const existing = session.agentSessionHistory.find(entry => entry.id === matched.id);
@@ -191,6 +197,17 @@ function activateMatchedSession(session, matched, workspace) {
     session.agentSessionHistory.push(entry);
   }
   saveSessionMetadata(session);
+}
+
+function clearHistoryFileAuthorizationIfIdentityChanges(session, workspace, agentSessionId) {
+  const currentWorkspace = path.resolve(String(session.workspace || ''));
+  const nextWorkspace = path.resolve(String(workspace || ''));
+  const sameWorkspace = process.platform === 'win32'
+    ? currentWorkspace.toLowerCase() === nextWorkspace.toLowerCase()
+    : currentWorkspace === nextWorkspace;
+  if (!sameWorkspace || stringOrEmpty(session.agentSessionId) !== stringOrEmpty(agentSessionId)) {
+    clearHistoryFileAuthorization(session);
+  }
 }
 
 function bindExplicitHistorySession(ws, session, input) {
@@ -236,6 +253,11 @@ function readRecentHistory(ws, transcriptPath, options) {
     );
     return null;
   }
+}
+
+function sendHistoryResult(ws, session, payload) {
+  registerHistoryPayloadFiles(session, payload);
+  sendSlashCommandResult(ws, 'history', payload);
 }
 
 function handleHistory(rawArg, ws, session, options = {}) {
@@ -284,7 +306,7 @@ function handleHistory(rawArg, ws, session, options = {}) {
         return;
       }
     }
-    sendSlashCommandResult(ws, 'history', buildHistoryPayload(agentType, matched.id, parsed.limit, recent, {
+    sendHistoryResult(ws, session, buildHistoryPayload(agentType, matched.id, parsed.limit, recent, {
       workspace: matched.workspace,
       replaceConversation: options.historyReload === true,
       switchedSession: bindResult.switched,
@@ -343,7 +365,7 @@ function handleHistory(rawArg, ws, session, options = {}) {
   const recent = history.rounds;
 
   if (recent.length === 0) {
-    sendSlashCommandResult(ws, 'history', buildHistoryPayload(agentType, agentSessionId, parsed.limit, [], {
+    sendHistoryResult(ws, session, buildHistoryPayload(agentType, agentSessionId, parsed.limit, [], {
       workspace,
       replaceConversation: options.historyReload === true,
       switchedSession: bindResult.switched,
@@ -353,7 +375,7 @@ function handleHistory(rawArg, ws, session, options = {}) {
     return;
   }
 
-  sendSlashCommandResult(ws, 'history', buildHistoryPayload(agentType, agentSessionId, parsed.limit, recent, {
+  sendHistoryResult(ws, session, buildHistoryPayload(agentType, agentSessionId, parsed.limit, recent, {
     workspace,
     replaceConversation: options.historyReload === true,
     switchedSession: bindResult.switched,

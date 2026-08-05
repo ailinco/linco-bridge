@@ -1,4 +1,5 @@
 const { buildOutboundFileMessage, resolveGetTarget, validateGetFile } = require('../core/fileReferences');
+const { authorizedHistoryFiles } = require('../core/historyFileAccess');
 const { send, sendError } = require('../core/protocol');
 const { knownProjectCandidates } = require('./project');
 
@@ -11,9 +12,11 @@ function handleGet(rawTarget, ws, session, config) {
 
   const projectRoots = knownProjectCandidates(session, {
     homeDir: config?.homeDir,
+    limit: 20,
   }).map(project => project.path);
   const validation = validateGetFile(resolved, session, config, {
     projectRoots,
+    allowedFiles: authorizedHistoryFiles(session),
   });
   if (!validation.ok) {
     sendError(ws, validation.message);

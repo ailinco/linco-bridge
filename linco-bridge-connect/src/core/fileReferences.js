@@ -352,20 +352,41 @@ function resolveAllowedFileAccess(filePath, session = {}, options = {}) {
     const root = roots.find(item =>
       item.realPath && isInsideOrSame(realFilePath, item.realPath)
     );
-    if (!root) return null;
-    return {
-      requestedPath,
-      filePath: realFilePath,
-      root,
-    };
+    if (root) {
+      return {
+        requestedPath,
+        filePath: realFilePath,
+        root,
+      };
+    }
+  } else {
+    const root = roots.find(item => isInsideOrSame(requestedPath, item.requestedPath));
+    if (root) {
+      return {
+        requestedPath,
+        filePath: requestedPath,
+        root,
+      };
+    }
   }
 
-  const root = roots.find(item => isInsideOrSame(requestedPath, item.requestedPath));
-  if (!root) return null;
+  const allowedFiles = Array.isArray(options.allowedFiles) ? options.allowedFiles : [];
+  const exactFile = allowedFiles.find(file =>
+    typeof file === 'string' && sameResolvedPath(requestedPath, file)
+  );
+  if (!exactFile) return null;
+
+  const allowedRealPath = safeRealpath(path.resolve(exactFile));
+  if (realFilePath && (!allowedRealPath || !sameResolvedPath(realFilePath, allowedRealPath))) {
+    return null;
+  }
+  if (realFilePath && !sameResolvedPath(requestedPath, realFilePath)) {
+    return null;
+  }
   return {
     requestedPath,
-    filePath: requestedPath,
-    root,
+    filePath: realFilePath || requestedPath,
+    exactFile: true,
   };
 }
 
@@ -398,6 +419,10 @@ function safeRealpath(value) {
 }
 
 function hasHiddenAccessPathSegment(access) {
+  if (access.exactFile) {
+    return hasHiddenAbsolutePathSegment(access.requestedPath) ||
+      hasHiddenAbsolutePathSegment(access.filePath);
+  }
   const requestedRoot = access.root.requestedPath;
   if (
     isInsideOrSame(access.requestedPath, requestedRoot) &&
@@ -411,6 +436,11 @@ function hasHiddenAccessPathSegment(access) {
     isInsideOrSame(access.filePath, realRoot) &&
     hasHiddenRelativePath(access.filePath, realRoot)
   );
+}
+
+function hasHiddenAbsolutePathSegment(filePath) {
+  const resolved = path.resolve(filePath);
+  return hasHiddenRelativePath(resolved, path.parse(resolved).root);
 }
 
 function hasHiddenRelativePath(filePath, root) {
@@ -431,6 +461,14 @@ function isInsideOrSame(filePath, dir) {
   if (!dir) return false;
   const relative = path.relative(path.resolve(dir), path.resolve(filePath));
   return !relative || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function sameResolvedPath(first, second) {
+  const firstPath = path.resolve(first);
+  const secondPath = path.resolve(second);
+  return process.platform === 'win32'
+    ? firstPath.toLowerCase() === secondPath.toLowerCase()
+    : firstPath === secondPath;
 }
 
 function cleanCandidate(value) {

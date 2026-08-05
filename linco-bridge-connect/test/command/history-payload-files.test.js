@@ -14,21 +14,71 @@ const {
   readClaudeSessionSummary,
 } = require('../../src/command/history/readers');
 
-test('buildHistoryPayload excludes file contents and keeps clickable file paths in text', () => {
+test('buildHistoryPayload keeps safe file references without file contents', () => {
   const fileBase64 = Buffer.alloc(2 * 1024 * 1024, 7).toString('base64');
   const assistantText = '文件已生成：[out.png](/tmp/out.png)';
   const payload = buildHistoryPayload('claude', 'sess-1', 10, [{
     user: 'see image',
-    userFiles: [{ name: 'photo.png', mimeType: 'image/png', base64: fileBase64 }],
+    userFiles: [
+      {
+        name: 'photo.png',
+        mimeType: 'image/png',
+        size: 2048,
+        path: 'D:\\workspace\\photo.png',
+        base64: fileBase64,
+        ignored: 'not forwarded',
+      },
+      {
+        name: 'second.jpg',
+        mimeType: 'image/jpeg',
+        size: 4096,
+        localPath: '/workspace/second.jpg',
+      },
+      {
+        name: 'inline.png',
+        mimeType: 'image/png',
+        size: 12,
+        localPath: 'data:image/png;base64,abc',
+      },
+      {
+        name: 'missing-size.png',
+        mimeType: 'image/png',
+        size: null,
+        localPath: '/workspace/missing-size.png',
+      },
+    ],
     assistant: assistantText,
     assistantFiles: [{ name: 'out.png', mimeType: 'image/png', base64: fileBase64 }],
   }]);
 
-  assert.equal(Object.prototype.hasOwnProperty.call(payload.rounds[0].user, 'files'), false);
+  assert.deepEqual(payload.rounds[0].user.files, [
+    {
+      name: 'photo.png',
+      mimeType: 'image/png',
+      size: 2048,
+      localPath: 'D:\\workspace\\photo.png',
+    },
+    {
+      name: 'second.jpg',
+      mimeType: 'image/jpeg',
+      size: 4096,
+      localPath: '/workspace/second.jpg',
+    },
+  ]);
   assert.equal(Object.prototype.hasOwnProperty.call(payload.rounds[0].assistant, 'files'), false);
   assert.equal(payload.rounds[0].assistant.text, assistantText);
   assert.doesNotMatch(JSON.stringify(payload), new RegExp(fileBase64.slice(0, 128)));
   assert.ok(Buffer.byteLength(JSON.stringify(payload), 'utf8') < 1024);
+});
+
+test('buildHistoryPayload keeps text-only history shape unchanged', () => {
+  const payload = buildHistoryPayload('codex', 'sess-text', 10, [{
+    user: 'question',
+    assistant: 'answer',
+  }]);
+
+  assert.equal(Object.prototype.hasOwnProperty.call(payload.rounds[0].user, 'files'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(payload.rounds[0].assistant, 'files'), false);
 });
 
 test('history thinking flag is opt-in', () => {

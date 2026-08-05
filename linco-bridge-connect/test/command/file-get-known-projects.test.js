@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { handleGet } = require('../../src/command/fileGet');
+const { knownProjectCandidates } = require('../../src/command/project');
 
 function createCaptureWs() {
   const sent = [];
@@ -69,6 +70,61 @@ function createFixture() {
 function outboundFile(ws) {
   return ws.sent.find(item => item.type === 'outbound_message' && item.mediaBase64);
 }
+
+function createManyProjectsFixture(count = 21) {
+  const fixture = createFixture();
+  const projectOrder = [];
+  const localProjects = {};
+  const projects = [];
+  for (let index = 1; index <= count; index++) {
+    const id = `project-${String(index).padStart(2, '0')}`;
+    const projectPath = path.join(fixture.homeDir, 'many-projects', id);
+    fs.mkdirSync(projectPath, { recursive: true });
+    projectOrder.push(id);
+    localProjects[id] = {
+      id,
+      name: id,
+      rootPaths: [projectPath],
+    };
+    projects.push(projectPath);
+  }
+  fs.writeFileSync(
+    path.join(fixture.homeDir, '.codex', '.codex-global-state.json'),
+    JSON.stringify({ 'project-order': projectOrder, 'local-projects': localProjects }),
+  );
+  fixture.session.workspace = projects[0];
+  return { ...fixture, projects };
+}
+
+test('project candidates return every normalized Codex state project', t => {
+  const fixture = createManyProjectsFixture();
+  t.after(() => fs.rmSync(fixture.homeDir, { recursive: true, force: true }));
+
+  const projects = knownProjectCandidates(fixture.session, { homeDir: fixture.homeDir });
+
+  assert.equal(projects.length, 21);
+  assert.deepEqual(projects.map(project => project.path), fixture.projects);
+});
+
+test('get keeps the legacy 20 known-project root permission limit', t => {
+  const fixture = createManyProjectsFixture();
+  t.after(() => fs.rmSync(fixture.homeDir, { recursive: true, force: true }));
+  const allowedTarget = path.join(fixture.projects[19], 'allowed.txt');
+  const excludedTarget = path.join(fixture.projects[20], 'excluded.txt');
+  fs.writeFileSync(allowedTarget, 'allowed project');
+  fs.writeFileSync(excludedTarget, 'excluded project');
+
+  const allowedWs = createCaptureWs();
+  handleGet(allowedTarget, allowedWs, fixture.session, fixture.config);
+  assert.equal(
+    outboundFile(allowedWs)?.mediaBase64,
+    Buffer.from('allowed project').toString('base64'),
+  );
+
+  const excludedWs = createCaptureWs();
+  handleGet(excludedTarget, excludedWs, fixture.session, fixture.config);
+  assert.equal(outboundFile(excludedWs), undefined);
+});
 
 test('get allows an absolute file from another project shown by /project', t => {
   const fixture = createFixture();

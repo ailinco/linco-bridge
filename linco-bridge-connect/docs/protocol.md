@@ -143,9 +143,32 @@
 `thinking` 字段，用于展示该回合模型过程输出；未带参数时历史 payload
 保持原结构。工具输出不会进入 `thinking`。
 
-history payload 不返回 `user.files`、`assistant.files` 或文件 Base64。回复正文中的
-Markdown 文件路径会原样保留，远端 IM 只在用户点击该路径后发送 `/get <路径>`，
-由连接器届时校验并读取文件。历史解析阶段只允许读取文件元数据，不应预读文件正文。
+history payload 可在 `user` 或 `assistant` 中返回可选的 `files` 数组。每条消息最多
+10 个文件，每个文件只包含 `name`、`mimeType`、`size` 和 `localPath`；`localPath`
+必须是普通本地绝对路径。该字段只用于远端 IM 按需调用现有 `/get <路径>` 流程：
+
+```json
+{
+  "files": [
+    {
+      "name": "photo.png",
+      "mimeType": "image/png",
+      "size": 2048,
+      "localPath": "D:\\workspace\\photo.png"
+    }
+  ]
+}
+```
+
+history payload 禁止携带文件 Base64、`data:` URI 或文件正文。回复正文中的 Markdown
+文件路径仍会原样保留，由连接器在真正收到 `/get` 请求时继续执行路径归属、类型和
+大小校验。历史解析阶段只允许读取文件元数据，不应预读文件正文。旧消费者可以忽略
+新增的可选 `files` 字段。
+
+连接器只为当前 Agent 类型、当前 Agent Session ID 和当前规范化项目路径登记 payload
+中实际出现的精确 `localPath`。该授权只保存在当前连接器进程的会话内，分页结果最多
+合并 200 个路径；项目或 Agent Session 切换后旧授权立即失效。授权不会开放文件所在目录，
+并且 `/get` 仍执行普通文件、大小、隐藏路径、危险扩展名和真实路径校验。
 
 当 history 的 `data` 序列化后超过 256 KiB，连接器不会发送单个超大
 `slash_command_result`，而是按顺序发送 `slash_command_result_chunk`。每个分片
@@ -181,7 +204,7 @@ Agent 适配器可能发送 `permission_request` 或 `danger_warning`。远端 I
 
 Agent 生成文件时通常先在回复中返回文件路径引用。Agent 可见提示词只要求返回 `[filename.ext](absolute-local-path)` 这类 Markdown 绝对路径引用，不暴露 `/get` 命令或下发实现细节。历史同步只传递该路径文本，不携带文件正文。远端 IM 点击引用后可以发送 `/get <路径>`，连接器校验路径、文件类型和大小后才读取文件，并返回包含 `mediaBase64` 或 `files` 的 `outbound_message`。
 
-连接器只应下发当前工作目录、`/project` 当前列出的项目、会话运行目录或附件目录内的普通非隐藏文件。相对路径保持当前会话目录语义，绝对路径按真实路径校验归属并拒绝软链接逃逸；默认拒绝 `.env`、`.git/config`、`.ssh/*` 等隐藏路径。
+`/project` 返回全部经过发现、校验和去重的项目，不再设置最终 20 项展示上限。文件下发权限不随展示列表扩大：`/get` 仍只采用前 20 个已知项目根目录，并额外接受当前身份 history payload 已登记的精确文件。连接器只应下发这些范围、当前工作目录、会话运行目录或附件目录内的普通非隐藏文件。相对路径保持当前会话目录语义，绝对路径按真实路径校验归属并拒绝软链接逃逸；默认拒绝 `.env`、`.git/config`、`.ssh/*` 等隐藏路径。
 
 ## 内部元数据
 

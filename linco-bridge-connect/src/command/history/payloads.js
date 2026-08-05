@@ -11,6 +11,10 @@ const {
 const CODEX_PUBLIC_ATTACHMENT_MARKER =
   /^\s*【(?:文件|图片)：([^】]+)】(?:\s*\([^\r\n]*\))?\s*$/u;
 const CODEX_PARSED_ATTACHMENT_MARKER = /^\s*【附件：([^】]+)】\s*$/u;
+const HISTORY_FILE_LIMIT = 10;
+const HISTORY_FILE_NAME_LIMIT = 255;
+const HISTORY_FILE_MIME_LIMIT = 255;
+const HISTORY_FILE_PATH_LIMIT = 4096;
 
 function normalizeAttachmentName(value) {
   return String(value || '').trim().normalize('NFC');
@@ -152,6 +156,40 @@ function mapRoundThinking(items) {
   };
 }
 
+function normalizeHistoryFileReferences(files) {
+  if (!Array.isArray(files)) return undefined;
+  const normalized = [];
+  for (const file of files) {
+    if (!file || typeof file !== 'object' || Array.isArray(file)) continue;
+    const name = typeof file.name === 'string' ? file.name.trim() : '';
+    const mimeType = typeof file.mimeType === 'string'
+      ? file.mimeType.trim().toLowerCase()
+      : '';
+    const pathValue = typeof file.localPath === 'string'
+      ? file.localPath.trim()
+      : typeof file.path === 'string'
+        ? file.path.trim()
+        : '';
+    const size = file.size;
+    if (!name || name.length > HISTORY_FILE_NAME_LIMIT ||
+        !mimeType || mimeType.length > HISTORY_FILE_MIME_LIMIT ||
+        !pathValue || pathValue.length > HISTORY_FILE_PATH_LIMIT ||
+        pathValue.includes('\0') || /^data:/iu.test(pathValue) ||
+        (!pathValue.startsWith('/') && !/^[A-Za-z]:[\\/]/u.test(pathValue)) ||
+        typeof size !== 'number' || !Number.isFinite(size) || size < 0) {
+      continue;
+    }
+    normalized.push({
+      name,
+      mimeType,
+      size: Math.trunc(size),
+      localPath: pathValue,
+    });
+    if (normalized.length >= HISTORY_FILE_LIMIT) break;
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function stableHistoryRoundIdentity(agentType, sessionId, round, ordinal) {
   const normalizedUser = String(round.identityUser || round.user || '')
     .replace(/\s+/gu, ' ')
@@ -197,6 +235,8 @@ function buildHistoryPayload(agentType, sessionId, requestedLimit, rounds, optio
         round,
         ordinal,
       );
+      const userFiles = normalizeHistoryFileReferences(round.userFiles);
+      const assistantFiles = normalizeHistoryFileReferences(round.assistantFiles);
       const payloadRound = {
         index: index + 1,
         ordinal,
@@ -210,6 +250,7 @@ function buildHistoryPayload(agentType, sessionId, requestedLimit, rounds, optio
             : round.user || '',
           timestamp: round.userTimestamp || null,
           timestampMs: timestampToMs(round.userTimestamp),
+          ...(userFiles ? { files: userFiles } : {}),
         },
         assistant: {
           messageId: round.assistant
@@ -219,6 +260,7 @@ function buildHistoryPayload(agentType, sessionId, requestedLimit, rounds, optio
           missing: !round.assistant,
           timestamp: round.assistantTimestamp || null,
           timestampMs: timestampToMs(round.assistantTimestamp),
+          ...(assistantFiles ? { files: assistantFiles } : {}),
         },
       };
       const thinking = mapRoundThinking(round.thinkingItems);
