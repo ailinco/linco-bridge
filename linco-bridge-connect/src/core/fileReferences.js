@@ -380,7 +380,11 @@ function resolveAllowedFileAccess(filePath, session = {}, options = {}) {
   if (realFilePath && (!allowedRealPath || !sameResolvedPath(realFilePath, allowedRealPath))) {
     return null;
   }
-  if (realFilePath && !sameResolvedPath(requestedPath, realFilePath)) {
+  if (
+    realFilePath &&
+    !sameResolvedPath(requestedPath, realFilePath) &&
+    !isKnownMacSystemPathAlias(requestedPath, realFilePath)
+  ) {
     return null;
   }
   return {
@@ -469,6 +473,15 @@ function sameResolvedPath(first, second) {
   return process.platform === 'win32'
     ? firstPath.toLowerCase() === secondPath.toLowerCase()
     : firstPath === secondPath;
+}
+
+function isKnownMacSystemPathAlias(requestedPath, realFilePath) {
+  if (process.platform !== 'darwin') return false;
+  const requested = path.resolve(requestedPath);
+  if (requested !== '/var' && !requested.startsWith(`/var${path.sep}`)) {
+    return false;
+  }
+  return path.resolve(realFilePath) === path.resolve(`/private${requested}`);
 }
 
 function cleanCandidate(value) {
