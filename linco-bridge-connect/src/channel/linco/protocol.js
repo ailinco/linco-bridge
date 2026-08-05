@@ -1,4 +1,7 @@
-const { extractFileReferences } = require("../../core/fileReferences");
+const {
+  buildMarkdownImageFallback,
+  extractFileReferences,
+} = require("../../core/fileReferences");
 const {
   isLincoMessage,
   lincoFilesToAttachments,
@@ -109,6 +112,7 @@ function mapLocalEventToLinco(event, session, config, linco) {
 
   switch (event.type) {
     case "turn_start":
+      linco.hasDeliveredMedia = false;
       return {
         ...base,
         type: "turn_start",
@@ -121,6 +125,9 @@ function mapLocalEventToLinco(event, session, config, linco) {
       linco.progressText = "";
       linco.hasEphemeralChunks = false;
       linco.hasFinalChunks = false;
+      if (linco.hasDeliveredMedia === undefined) {
+        linco.hasDeliveredMedia = false;
+      }
       linco.streamId = linco.streamId || `linco-stream-${Date.now()}`;
       return null;
     case "assistant_chunk": {
@@ -156,17 +163,31 @@ function mapLocalEventToLinco(event, session, config, linco) {
     case "assistant_end": {
       const fallbackText = linco.progressText || linco.fullText || "";
       const finalText = linco.finalText || (!linco.hasFinalChunks ? normalizeFinalText(fallbackText, linco) : "");
+      const imageFallback = linco.hasDeliveredMedia
+        ? null
+        : buildMarkdownImageFallback(finalText, session, config);
+      const deliveredText = imageFallback?.text ?? finalText;
+      if (imageFallback) linco.hasDeliveredMedia = true;
       return {
         ...base,
         type: "stream_chunk",
         mode: "chunk",
         streamId: linco.streamId,
         delta: "",
-        fullText: finalText,
+        fullText: deliveredText,
         phase: "final_answer",
         ephemeral: false,
         replacePrevious: Boolean(linco.hasEphemeralChunks && !linco.hasFinalChunks),
-        references: extractFileReferences(finalText, session, config),
+        references: extractFileReferences(deliveredText, session, config),
+        ...(imageFallback
+          ? {
+              text: finalText,
+              mediaName: imageFallback.mediaName,
+              mediaType: imageFallback.mediaType,
+              mediaBase64: imageFallback.mediaBase64,
+              size: imageFallback.size,
+            }
+          : {}),
         done: true,
       };
     }
@@ -296,6 +317,9 @@ function mapLocalEventToLinco(event, session, config, linco) {
         ts: event.ts || Date.now(),
       };
     default:
+      if (event.mediaBase64 || event.mediaUrl || event.files?.length) {
+        linco.hasDeliveredMedia = true;
+      }
       return withLincoOutboundFiles({
         ...base,
         ...event,

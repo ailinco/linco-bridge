@@ -213,6 +213,49 @@ function extractFileReferences(text, session, config) {
   return references;
 }
 
+function buildMarkdownImageFallback(text, session, config) {
+  const source = String(text || '');
+  const links = markdownLinksFromText(source);
+  for (const link of links) {
+    const candidate = normalizeFileUriPath(cleanMarkdownTarget(link.target));
+    const resolved = resolveGetTarget(candidate, session);
+    if (!resolved || kindFromFilename(resolved) !== 'image') continue;
+    const validation = validateGetFile(resolved, session, config);
+    if (!validation.ok) continue;
+
+    let file;
+    try {
+      file = buildOutboundFileMessage(
+        session,
+        validation.path,
+        validation.size,
+        { readPath: validation.readPath },
+      );
+    } catch {
+      continue;
+    }
+    const cleanedText = source
+      .replace(markdownLinkPattern(), (match, rawTarget) => {
+        const target = normalizeFileUriPath(cleanMarkdownTarget(rawTarget));
+        const linkedPath = resolveGetTarget(target, session);
+        return linkedPath && path.resolve(linkedPath) === path.resolve(validation.path)
+          ? ''
+          : match;
+      })
+      .replace(/[ \t]+\r?\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    return {
+      text: cleanedText,
+      mediaName: file.mediaName,
+      mediaType: file.mediaType,
+      mediaBase64: file.mediaBase64,
+      size: file.size,
+    };
+  }
+  return null;
+}
+
 function candidatePathsFromText(text, session) {
   const source = String(text || '');
   return candidatePathsFromMarkdownLinks(source);
@@ -220,12 +263,22 @@ function candidatePathsFromText(text, session) {
 
 function candidatePathsFromMarkdownLinks(text) {
   const candidates = [];
-  const markdownLinkPattern = /\[[^\]]+\]\(([^)]+)\)/g;
-  for (const match of String(text || '').matchAll(markdownLinkPattern)) {
-    const target = normalizeFileUriPath(cleanMarkdownTarget(match[1]));
+  for (const link of markdownLinksFromText(text)) {
+    const target = normalizeFileUriPath(cleanMarkdownTarget(link.target));
     if (path.isAbsolute(target)) candidates.push(target);
   }
   return candidates;
+}
+
+function markdownLinkPattern() {
+  return /!?\[[^\]]*\]\(([^)]+)\)/g;
+}
+
+function markdownLinksFromText(text) {
+  return [...String(text || '').matchAll(markdownLinkPattern())].map(match => ({
+    isImage: match[0].startsWith('!'),
+    target: match[1],
+  }));
 }
 
 function relativePathForReference(filePath, session) {
@@ -423,6 +476,7 @@ module.exports = {
   buildFileReference,
   buildFileReferenceHint,
   buildFileReferenceSystemPrompt,
+  buildMarkdownImageFallback,
   buildOutboundFileMessage,
   candidatePathsFromMarkdownLinks,
   extractFileReferences,

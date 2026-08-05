@@ -108,10 +108,19 @@ const handleAppServerMessage = loadCodexHandler();
     assert.strictEqual(finalChunk.replacePrevious, true);
     assert.strictEqual(finalChunk.fullText, finalText);
     assert(done);
-    assert.strictEqual(done.fullText, finalText);
+    assert.strictEqual(
+      done.fullText,
+      '这是一张“北斗星”品牌或功能入口图，右侧图标表现的是“文档检索/信息查询”。仅凭图片无法确定它具体属于哪个软件或系统。',
+    );
+    assert.strictEqual(done.text, finalText);
     assert(!done.fullText.includes(progressText));
-    assert.strictEqual(done.references.length, 1);
-    assert.strictEqual(done.references[0].name, 'scaled_beidouxing.png');
+    assert.strictEqual(done.references.length, 0);
+    assert.strictEqual(done.mediaName, 'scaled_beidouxing.png');
+    assert.strictEqual(done.mediaType, 'image/png');
+    assert.strictEqual(
+      done.mediaBase64,
+      Buffer.from('fake image').toString('base64'),
+    );
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
   }

@@ -3147,6 +3147,81 @@ if (process.platform === 'win32') {
 }
 
 {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-reference-image-fallback-'));
+  const filePath = path.join(workspace, 'generated.png');
+  fs.writeFileSync(filePath, Buffer.from('generated image'));
+  const session = {
+    id: 'session-ref-image-fallback',
+    workspace,
+    runtimeDir: workspace,
+    attachmentsDir: path.join(workspace, 'attachments'),
+  };
+  const linco = {
+    streamId: 'linco-stream-ref-image-fallback',
+    fullText: `图片已生成。\n\n![](${filePath})\n\n[打开原图](${filePath})`,
+  };
+
+  const payload = mapLocalEventToLinco({ type: 'assistant_end' }, session, {
+    maxOutgoingAttachmentBytes: 1024 * 1024,
+    allowUnsafeAttachments: false,
+    unsafeAttachmentExtensions: ['.exe', '.bat', '.cmd', '.ps1'],
+  }, linco);
+
+  assert.strictEqual(payload.type, 'stream_chunk');
+  assert.strictEqual(payload.done, true);
+  assert.strictEqual(payload.fullText, '图片已生成。');
+  assert.strictEqual(
+    payload.text,
+    `图片已生成。\n\n![](${filePath})\n\n[打开原图](${filePath})`,
+  );
+  assert.strictEqual(payload.mediaName, 'generated.png');
+  assert.strictEqual(payload.mediaType, 'image/png');
+  assert.strictEqual(
+    payload.mediaBase64,
+    Buffer.from('generated image').toString('base64'),
+  );
+  assert.deepStrictEqual(payload.references, []);
+}
+
+{
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-reference-image-existing-media-'));
+  const filePath = path.join(workspace, 'already-delivered.png');
+  fs.writeFileSync(filePath, Buffer.from('generated image'));
+  const session = {
+    id: 'session-ref-image-existing-media',
+    workspace,
+    runtimeDir: workspace,
+    attachmentsDir: path.join(workspace, 'attachments'),
+  };
+  const linco = { streamId: 'linco-stream-ref-image-existing-media' };
+  const config = {
+    maxOutgoingAttachmentBytes: 1024 * 1024,
+    allowUnsafeAttachments: false,
+    unsafeAttachmentExtensions: ['.exe', '.bat', '.cmd', '.ps1'],
+  };
+
+  mapLocalEventToLinco({ type: 'assistant_start' }, session, config, linco);
+  mapLocalEventToLinco({
+    type: 'outbound_message',
+    mediaName: 'already-delivered.png',
+    mediaType: 'image/png',
+    mediaBase64: Buffer.from('generated image').toString('base64'),
+  }, session, config, linco);
+  linco.finalText = `![生成图片](${filePath})`;
+  linco.hasFinalChunks = true;
+
+  const payload = mapLocalEventToLinco(
+    { type: 'assistant_end' },
+    session,
+    config,
+    linco,
+  );
+
+  assert.strictEqual(payload.fullText, `![生成图片](${filePath})`);
+  assert.strictEqual(payload.mediaBase64, undefined);
+}
+
+{
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-reference-file-uri-'));
   const filePath = path.join(workspace, 'uri-report.txt');
   fs.writeFileSync(filePath, 'referenced uri file\n');
