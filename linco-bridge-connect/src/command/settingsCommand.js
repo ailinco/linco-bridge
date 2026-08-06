@@ -13,7 +13,7 @@ const {
   sendSlashCommandResult,
 } = require('./common');
 
-const COMPATIBLE_CODEX_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
+const LEGACY_BRIDGE_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 
 function handleSettingsListCommand(ws, session, config = {}) {
   const agentType = session.agentType || 'claude';
@@ -78,10 +78,7 @@ async function buildCodexSettingsPayload(session, config = {}) {
   const agentConfig = config.agents?.codex || {};
   const currentReasoning = codexAgent._internal.currentCodexReasoningEffort(session);
   const defaultEffort = codexAgent._internal.codexDefaultReasoningEffort(agentConfig);
-  const compatibleReasoningOptions = COMPATIBLE_CODEX_REASONING_EFFORTS.map(effort => ({
-    id: effort,
-    label: formatReasoningLabel(effort),
-  }));
+  const compatibleReasoningOptions = LEGACY_BRIDGE_REASONING_EFFORTS.map(effort => reasoningOptionFromId(effort));
   const reasoningOptions = compatibleReasoningOptions.map(option => ({
     ...option,
     command: `/reasoning ${option.id}`,
@@ -121,10 +118,13 @@ async function buildCodexSettingsPayload(session, config = {}) {
 function buildClaudeSettingsPayload(session, config = {}) {
   const agentConfig = config.agents?.claude || {};
   const currentReasoning = claudeAgent._internal.currentClaudeEffort(session, config);
-  const defaultEffort = String(agentConfig.effort || 'medium').trim();
-  const supportedReasoningEfforts = claudeAgent._internal.availableClaudeEfforts().map(effort => compactReasoningOption({
-    id: effort.name,
-    label: formatReasoningLabel(effort.name),
+  const efforts = claudeAgent._internal.availableClaudeEfforts();
+  const effortIds = efforts.map(effort => reasoningOptionFromId(effort.name).id);
+  const configuredDefaultEffort = String(agentConfig.effort || '').trim().toLowerCase();
+  const normalizedDefaultEffort = effortIds.includes(configuredDefaultEffort)
+    ? configuredDefaultEffort
+    : effortIds[0] || '';
+  const supportedReasoningEfforts = efforts.map(effort => reasoningOptionFromId(effort.name, {
     description: effort.desc,
   }));
   const reasoningOptions = supportedReasoningEfforts.map(effort => ({
@@ -135,15 +135,12 @@ function buildClaudeSettingsPayload(session, config = {}) {
   const defaultModel = String(agentConfig.model || '').trim();
   const models = claudeAgent._internal.availableClaudeModels();
   const runtimeDefaultModel = findModelEntry(models, defaultModel) || models[0] || null;
-  const supportedDefaultEffort = supportedReasoningEfforts.some(effort => effort.id === defaultEffort)
-    ? defaultEffort
-    : supportedReasoningEfforts[0]?.id || '';
   return {
     capabilitiesVersion: 2,
     agentType: 'claude',
     reasoning: {
       current: currentReasoning,
-      defaultEffort,
+      defaultEffort: normalizedDefaultEffort,
       model: current || defaultModel,
       options: reasoningOptions,
     },
@@ -156,7 +153,7 @@ function buildClaudeSettingsPayload(session, config = {}) {
         label: model.name,
         ...(model.desc ? { description: model.desc } : {}),
         command: `/model ${model.name}`,
-        defaultReasoningEffort: supportedDefaultEffort,
+        defaultReasoningEffort: normalizedDefaultEffort,
         supportedReasoningEfforts,
       })),
     },
@@ -165,7 +162,7 @@ function buildClaudeSettingsPayload(session, config = {}) {
 
 function buildCodexModelItem(entry, connectorDefaultEffort, compatibleReasoningOptions) {
   const supportedReasoningEfforts = entry.supportedReasoningEfforts.length
-    ? entry.supportedReasoningEfforts.map(compactReasoningOption)
+    ? entry.supportedReasoningEfforts.map(option => reasoningOptionFromId(option.id, option))
     : compatibleReasoningOptions;
   const requestedDefault = entry.defaultReasoningEffort || connectorDefaultEffort;
   const defaultReasoningEffort = supportedReasoningEfforts.some(option => option.id === requestedDefault)
@@ -181,11 +178,14 @@ function buildCodexModelItem(entry, connectorDefaultEffort, compatibleReasoningO
   };
 }
 
-function compactReasoningOption(option) {
+function reasoningOptionFromId(effort, source = {}) {
+  const id = String(effort ?? '').trim().toLowerCase();
+  const label = String(source.label ?? '').trim() || formatReasoningLabel(id);
+  const description = String(source.description ?? '').trim();
   return {
-    id: option.id,
-    label: option.label,
-    ...(option.description ? { description: option.description } : {}),
+    id,
+    label,
+    ...(description ? { description } : {}),
   };
 }
 

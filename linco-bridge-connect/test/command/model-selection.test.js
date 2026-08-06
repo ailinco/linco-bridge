@@ -173,8 +173,6 @@ const codexSettingsTest = (async () => {
         supportedReasoningEfforts: [
           { reasoningEffort: 'low' },
           { reasoningEffort: 'medium' },
-          { reasoningEffort: 'high' },
-          { reasoningEffort: 'xhigh' },
         ],
       },
     ],
@@ -211,7 +209,16 @@ const codexSettingsTest = (async () => {
       { id: 'ultra', label: 'Ultra', description: 'Deepest reasoning' },
     ],
   });
-  assert.strictEqual(result.data.model.items[1].defaultReasoningEffort, 'medium');
+  assert.deepStrictEqual(result.data.model.items[1], {
+    id: 'codex-terra',
+    label: 'Codex Terra',
+    command: '/model codex-terra',
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: [
+      { id: 'low', label: 'Low' },
+      { id: 'medium', label: 'Medium' },
+    ],
+  });
   assert.strictEqual(result.data.model.items.some(item => item.id === 'codex-mini-latest'), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(result.data.reasoning.options[0], 'isCurrent'), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(result.data.reasoning.options[0], 'isDefault'), false);
