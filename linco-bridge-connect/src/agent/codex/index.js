@@ -668,9 +668,14 @@ async function loadCodexModelNames(session, config) {
 }
 
 async function loadCodexActualModelNames(session, config) {
+  const entries = await loadCodexActualModelEntries(session, config);
+  return entries.map(entry => entry.name);
+}
+
+async function loadCodexActualModelEntries(session, config) {
   await ensureAppServer(session, config);
   const result = await rpcRequest(session, nextRpcId(session), 'model/list', { includeHidden: true, limit: 100 });
-  return normalizeCodexModelList(result);
+  return normalizeCodexModelEntries(result);
 }
 
 async function resolveCodexReasoningInput(session, config, input) {
@@ -2619,6 +2624,7 @@ module.exports = {
     codexReasoningInputNeedsLookup,
     formatCodexModelList,
     formatCodexReasoningList,
+    loadCodexActualModelEntries,
     loadCodexActualModelNames,
     modelCodexContext,
     normalizeCodexModelEntries,

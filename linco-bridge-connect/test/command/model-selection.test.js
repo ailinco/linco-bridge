@@ -140,7 +140,10 @@ const codexSettingsTest = (async () => {
     messageQueue: [],
     agentSessionHistory: [],
   };
-  const config = { agents: { codex: { mode: 'app-server', model: 'gpt-5.4' } }, logger: { info() {}, warn() {}, error() {} } };
+  const config = {
+    agents: { codex: { mode: 'app-server', model: 'missing-model', reasoningEffort: 'high' } },
+    logger: { info() {}, warn() {}, error() {} },
+  };
 
   assert.strictEqual(handleSlashCommand('getModelsAndReasons', ws, session, config), true);
   await new Promise(resolve => setImmediate(resolve));
@@ -148,25 +151,73 @@ const codexSettingsTest = (async () => {
   assert.strictEqual(rpc.method, 'model/list');
   session.codexPendingRequests.get(rpc.id).resolve({
     models: [
-      { id: 'actual-model-a' },
-      { id: 'actual-model-b' },
+      {
+        id: 'codex-sol',
+        displayName: 'Codex Sol',
+        description: 'Frontier coding model',
+        defaultReasoningEffort: 'low',
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'low', label: 'Low latency', description: 'Fast responses' },
+          { reasoningEffort: 'medium' },
+          { reasoningEffort: 'high', description: 'Deeper reasoning' },
+          { reasoningEffort: 'xhigh', description: 'Extra-high reasoning' },
+          { reasoningEffort: 'max', description: 'Maximum reasoning' },
+          { reasoningEffort: 'ultra', description: 'Deepest reasoning' },
+        ],
+      },
+      {
+        id: 'codex-terra',
+        displayName: 'Codex Terra',
+        defaultReasoningEffort: 'medium',
+        isDefault: true,
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'low' },
+          { reasoningEffort: 'medium' },
+          { reasoningEffort: 'high' },
+          { reasoningEffort: 'xhigh' },
+        ],
+      },
     ],
   });
   await new Promise(resolve => setImmediate(resolve));
   const result = ws.sent.find(item => item.type === 'slash_command_result');
   assert.strictEqual(result.command, 'getModelsAndReasons');
+  assert.strictEqual(result.data.capabilitiesVersion, 2);
   assert.strictEqual(result.data.reasoning.current, 'high');
   assert.strictEqual(result.data.model.current, 'gpt-5.5');
-  assert.ok(result.data.reasoning.options.some(item => item.id === 'high'));
-  assert.deepStrictEqual(result.data.model.items.map(item => item.id), [
-    'actual-model-a',
-    'actual-model-b',
+  assert.deepStrictEqual(result.data.reasoning.options.map(item => item.id), [
+    'low',
+    'medium',
+    'high',
+    'xhigh',
   ]);
+  assert.deepStrictEqual(result.data.model.items.map(item => item.id), [
+    'codex-sol',
+    'codex-terra',
+  ]);
+  assert.strictEqual(result.data.model.runtimeDefaultModelId, 'codex-terra');
+  assert.deepStrictEqual(result.data.model.items[0], {
+    id: 'codex-sol',
+    label: 'Codex Sol',
+    description: 'Frontier coding model',
+    command: '/model codex-sol',
+    defaultReasoningEffort: 'low',
+    supportedReasoningEfforts: [
+      { id: 'low', label: 'Low latency', description: 'Fast responses' },
+      { id: 'medium', label: 'Medium' },
+      { id: 'high', label: 'High', description: 'Deeper reasoning' },
+      { id: 'xhigh', label: 'Extra High', description: 'Extra-high reasoning' },
+      { id: 'max', label: 'Max', description: 'Maximum reasoning' },
+      { id: 'ultra', label: 'Ultra', description: 'Deepest reasoning' },
+    ],
+  });
+  assert.strictEqual(result.data.model.items[1].defaultReasoningEffort, 'medium');
   assert.strictEqual(result.data.model.items.some(item => item.id === 'codex-mini-latest'), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(result.data.reasoning.options[0], 'isCurrent'), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(result.data.reasoning.options[0], 'isDefault'), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(result.data.model.items[0], 'isCurrent'), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(result.data.model.items[0], 'isDefault'), false);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(result.data.model.items[0].supportedReasoningEfforts[1], 'description'), false);
   assert.strictEqual(ws.sent.at(-1).type, 'turn_end');
 
   const failedWs = createCaptureWs();
@@ -185,7 +236,10 @@ const codexSettingsTest = (async () => {
   failedSession.codexPendingRequests.get(failedRpc.id).reject(new Error('model list unavailable'));
   await new Promise(resolve => setImmediate(resolve));
   const failedResult = failedWs.sent.find(item => item.type === 'slash_command_result');
+  assert.strictEqual(failedResult.data.capabilitiesVersion, 2);
+  assert.deepStrictEqual(failedResult.data.reasoning.options.map(item => item.id), ['low', 'medium', 'high', 'xhigh']);
   assert.deepStrictEqual(failedResult.data.model.items, []);
+  assert.strictEqual(failedResult.data.model.runtimeDefaultModelId, '');
   assert.strictEqual(failedResult.data.model.listError, 'model list unavailable');
   assert.strictEqual(failedResult.data.model.items.some(item => item.id === 'codex-mini-latest'), false);
 
@@ -200,16 +254,28 @@ const codexSettingsTest = (async () => {
     codexRpcId: 0,
     codexModelOverride: '',
   };
-  assert.strictEqual(handleSlashCommand('getModelsAndReasons', defaultOnlyWs, defaultOnlySession, config), true);
+  const configuredModelConfig = {
+    agents: { codex: { mode: 'app-server', model: 'CODEX-SOL', reasoningEffort: 'medium' } },
+    logger: config.logger,
+  };
+  assert.strictEqual(handleSlashCommand('getModelsAndReasons', defaultOnlyWs, defaultOnlySession, configuredModelConfig), true);
   await new Promise(resolve => setImmediate(resolve));
   const defaultOnlyRpc = JSON.parse(defaultOnlyChild.stdin.written[0]);
   defaultOnlySession.codexPendingRequests.get(defaultOnlyRpc.id).resolve({
-    models: [{ id: 'gpt-5.4' }],
+    models: [{ id: 'codex-sol' }],
   });
   await new Promise(resolve => setImmediate(resolve));
   const defaultOnlyResult = defaultOnlyWs.sent.find(item => item.type === 'slash_command_result');
   assert.strictEqual(defaultOnlyResult.data.model.current, '');
-  assert.strictEqual(defaultOnlyResult.data.model.defaultModel, 'gpt-5.4');
+  assert.strictEqual(defaultOnlyResult.data.model.defaultModel, 'CODEX-SOL');
+  assert.strictEqual(defaultOnlyResult.data.model.runtimeDefaultModelId, 'codex-sol');
+  assert.deepStrictEqual(defaultOnlyResult.data.model.items[0].supportedReasoningEfforts.map(item => item.id), [
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+  ]);
+  assert.strictEqual(defaultOnlyResult.data.model.items[0].defaultReasoningEffort, 'medium');
 })();
 
 {
@@ -550,6 +616,7 @@ assert.strictEqual(slashInternals.currentModel({ agentType: 'claude', claudeMode
 assert.strictEqual(slashInternals.currentModel({ agentType: 'hermes', hermesModelOverride: 'qwen3.6-flash' }, { agents: { hermes: { model: 'qwen3.6-plus' } } }), 'qwen3.6-flash');
 assert.strictEqual(slashInternals.currentModel({ agentType: 'openclaw', openclawModelOverride: 'bailian/qwen3.6-flash' }, { agents: { openclaw: { model: 'bailian/qwen3.6-plus' } } }), 'bailian/qwen3.6-flash');
 assert.deepStrictEqual(codex._internal.normalizeCodexModelList({ data: [{ id: 'gpt-5-codex' }, { model: 'gpt-5' }] }), ['gpt-5-codex', 'gpt-5']);
+assert.strictEqual(typeof codex._internal.loadCodexActualModelEntries, 'function');
 assert.strictEqual(claude._internal.currentClaudeModel({ claudeModelOverride: 'sonnet' }, { agents: { claude: { model: 'opus' } } }), 'sonnet');
 assert.strictEqual(claude._internal.currentClaudeEffort({ claudeEffortOverride: 'high' }, { agents: { claude: { effort: 'medium' } } }), 'high');
 assert.strictEqual(claude._internal.resolveClaudeModelInput('1'), 'sonnet');

@@ -13,6 +13,8 @@ const {
   sendSlashCommandResult,
 } = require('./common');
 
+const COMPATIBLE_CODEX_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
+
 function handleSettingsListCommand(ws, session, config = {}) {
   const agentType = session.agentType || 'claude';
   if (agentType !== 'codex' && agentType !== 'claude') {
@@ -76,26 +78,29 @@ async function buildCodexSettingsPayload(session, config = {}) {
   const agentConfig = config.agents?.codex || {};
   const currentReasoning = codexAgent._internal.currentCodexReasoningEffort(session);
   const defaultEffort = codexAgent._internal.codexDefaultReasoningEffort(agentConfig);
-  const reasoningOptions = codexAgent._internal.uniqueReasoningEfforts([
-    'low',
-    'medium',
-    'high',
-    'xhigh',
-  ]).map(effort => ({
+  const compatibleReasoningOptions = COMPATIBLE_CODEX_REASONING_EFFORTS.map(effort => ({
     id: effort,
     label: formatReasoningLabel(effort),
-    command: `/reasoning ${effort}`,
+  }));
+  const reasoningOptions = compatibleReasoningOptions.map(option => ({
+    ...option,
+    command: `/reasoning ${option.id}`,
   }));
   const current = String(session.codexModelOverride || '').trim();
   const defaultModel = String(agentConfig.model || '').trim();
-  let models = [];
+  let entries = [];
   let listError = '';
   try {
-    models = await codexAgent._internal.loadCodexActualModelNames(session, config);
+    entries = await codexAgent._internal.loadCodexActualModelEntries(session, config);
   } catch (err) {
     listError = err.message;
   }
+  const runtimeDefaultEntry = findModelEntry(entries, defaultModel)
+    || entries.find(entry => entry.isDefault)
+    || entries[0]
+    || null;
   return {
+    capabilitiesVersion: 2,
     agentType: 'codex',
     reasoning: {
       current: currentReasoning,
@@ -106,12 +111,9 @@ async function buildCodexSettingsPayload(session, config = {}) {
     model: {
       current,
       defaultModel,
+      runtimeDefaultModelId: runtimeDefaultEntry?.name || '',
       ...(listError ? { listError } : {}),
-      items: models.map(model => ({
-        id: model,
-        label: model,
-        command: `/model ${model}`,
-      })),
+      items: entries.map(entry => buildCodexModelItem(entry, defaultEffort, compatibleReasoningOptions)),
     },
   };
 }
@@ -120,16 +122,24 @@ function buildClaudeSettingsPayload(session, config = {}) {
   const agentConfig = config.agents?.claude || {};
   const currentReasoning = claudeAgent._internal.currentClaudeEffort(session, config);
   const defaultEffort = String(agentConfig.effort || 'medium').trim();
-  const reasoningOptions = claudeAgent._internal.availableClaudeEfforts().map(effort => ({
+  const supportedReasoningEfforts = claudeAgent._internal.availableClaudeEfforts().map(effort => compactReasoningOption({
     id: effort.name,
     label: formatReasoningLabel(effort.name),
     description: effort.desc,
-    command: `/reasoning ${effort.name}`,
+  }));
+  const reasoningOptions = supportedReasoningEfforts.map(effort => ({
+    ...effort,
+    command: `/reasoning ${effort.id}`,
   }));
   const current = String(session.claudeModelOverride || '').trim();
   const defaultModel = String(agentConfig.model || '').trim();
-  const models = claudeAgent._internal.availableClaudeModels().map(model => model.name);
+  const models = claudeAgent._internal.availableClaudeModels();
+  const runtimeDefaultModel = findModelEntry(models, defaultModel) || models[0] || null;
+  const supportedDefaultEffort = supportedReasoningEfforts.some(effort => effort.id === defaultEffort)
+    ? defaultEffort
+    : supportedReasoningEfforts[0]?.id || '';
   return {
+    capabilitiesVersion: 2,
     agentType: 'claude',
     reasoning: {
       current: currentReasoning,
@@ -140,13 +150,49 @@ function buildClaudeSettingsPayload(session, config = {}) {
     model: {
       current,
       defaultModel,
+      runtimeDefaultModelId: runtimeDefaultModel?.name || '',
       items: models.map(model => ({
-        id: model,
-        label: model,
-        command: `/model ${model}`,
+        id: model.name,
+        label: model.name,
+        ...(model.desc ? { description: model.desc } : {}),
+        command: `/model ${model.name}`,
+        defaultReasoningEffort: supportedDefaultEffort,
+        supportedReasoningEfforts,
       })),
     },
   };
+}
+
+function buildCodexModelItem(entry, connectorDefaultEffort, compatibleReasoningOptions) {
+  const supportedReasoningEfforts = entry.supportedReasoningEfforts.length
+    ? entry.supportedReasoningEfforts.map(compactReasoningOption)
+    : compatibleReasoningOptions;
+  const requestedDefault = entry.defaultReasoningEffort || connectorDefaultEffort;
+  const defaultReasoningEffort = supportedReasoningEfforts.some(option => option.id === requestedDefault)
+    ? requestedDefault
+    : supportedReasoningEfforts[0]?.id || '';
+  return {
+    id: entry.name,
+    label: entry.label,
+    ...(entry.description ? { description: entry.description } : {}),
+    command: `/model ${entry.name}`,
+    defaultReasoningEffort,
+    supportedReasoningEfforts,
+  };
+}
+
+function compactReasoningOption(option) {
+  return {
+    id: option.id,
+    label: option.label,
+    ...(option.description ? { description: option.description } : {}),
+  };
+}
+
+function findModelEntry(entries, configuredModel) {
+  const target = String(configuredModel || '').trim().toLowerCase();
+  if (!target) return null;
+  return entries.find(entry => String(entry.name || '').trim().toLowerCase() === target) || null;
 }
 
 function formatReasoningLabel(effort) {
@@ -161,6 +207,8 @@ function formatReasoningLabel(effort) {
       return 'Extra High';
     case 'max':
       return 'Max';
+    case 'ultra':
+      return 'Ultra';
     case 'minimal':
       return 'Minimal';
     case 'none':
