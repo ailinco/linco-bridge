@@ -7,6 +7,10 @@ const { handleSlashCommand, _internal: slashInternals } = require('../../src/com
 const { createSession, saveSessionMetadata } = require('../../src/core/session');
 const claude = require('../../src/agent/claude');
 const codex = require('../../src/agent/codex');
+const {
+  formatCodexReasoningEffortLabel,
+  normalizeCodexReasoningOptions,
+} = require('../../src/agent/codex/options');
 const hermes = require('../../src/agent/hermes');
 const openclaw = require('../../src/agent/openclaw');
 const { createTextStreamBuffer } = require('../../src/core/streamBuffer');
@@ -559,15 +563,83 @@ assert.deepStrictEqual(codex._internal.withCodexFallbackModels(['gpt-5.5', 'cust
 assert.deepStrictEqual(codex._internal.normalizeCodexModelEntries({
   data: [{
     model: 'gpt-5.5',
-    defaultReasoningEffort: 'medium',
-    supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'medium' }, { reasoningEffort: 'xhigh' }],
+    displayName: 'GPT-5.5 Codex',
+    description: 'Primary coding model',
+    defaultReasoningEffort: 'ultra',
+    isDefault: true,
+    supportedReasoningEfforts: [
+      { reasoningEffort: 'low', label: 'Low effort', description: 'Fast responses' },
+      { reasoningEffort: 'max', description: 'Maximum reasoning' },
+      { reasoningEffort: 'ULTRA', description: 'Deepest reasoning' },
+      { reasoningEffort: 'ultra', label: 'Duplicate ultra', description: 'Ignored duplicate' },
+    ],
   }],
 }), [{
   name: 'gpt-5.5',
-  supportedReasoningEfforts: ['low', 'medium', 'xhigh'],
-  defaultReasoningEffort: 'medium',
-  isDefault: false,
+  label: 'GPT-5.5 Codex',
+  description: 'Primary coding model',
+  supportedReasoningEfforts: [
+    { id: 'low', label: 'Low effort', description: 'Fast responses' },
+    { id: 'max', label: 'Max', description: 'Maximum reasoning' },
+    { id: 'ultra', label: 'Ultra', description: 'Deepest reasoning' },
+  ],
+  defaultReasoningEffort: 'ultra',
+  isDefault: true,
 }]);
+assert.deepStrictEqual(normalizeCodexReasoningOptions([
+  { id: 'MAX' },
+  { effort: 'ultra' },
+]), [
+  { id: 'max', label: 'Max', description: '' },
+  { id: 'ultra', label: 'Ultra', description: '' },
+]);
+assert.strictEqual(formatCodexReasoningEffortLabel('max'), 'Max');
+assert.strictEqual(formatCodexReasoningEffortLabel('ultra'), 'Ultra');
+
+const longCapabilityId = 'x'.repeat(121);
+const boundedModelLabel = 'L'.repeat(201);
+const boundedDescription = 'D'.repeat(1001);
+assert.deepStrictEqual(codex._internal.normalizeCodexModelEntries({
+  data: [
+    {
+      model: 'bounded-model',
+      displayName: boundedModelLabel,
+      description: boundedDescription,
+      defaultReasoningEffort: 'ultra',
+      supportedReasoningEfforts: [
+        { reasoningEffort: 'low', label: boundedModelLabel, description: boundedDescription },
+        { reasoningEffort: 'medium' },
+        { reasoningEffort: '' },
+        { reasoningEffort: 'bad\u0000id' },
+        { reasoningEffort: longCapabilityId },
+      ],
+    },
+    { model: '', displayName: 'Empty ID' },
+    { model: 'bad\u001fid', displayName: 'Control ID' },
+    { model: longCapabilityId, displayName: 'Long ID' },
+    { model: 'fallback-label' },
+  ],
+}), [
+  {
+    name: 'bounded-model',
+    label: 'L'.repeat(200),
+    description: 'D'.repeat(1000),
+    supportedReasoningEfforts: [
+      { id: 'low', label: 'L'.repeat(200), description: 'D'.repeat(1000) },
+      { id: 'medium', label: 'Medium', description: '' },
+    ],
+    defaultReasoningEffort: 'low',
+    isDefault: false,
+  },
+  {
+    name: 'fallback-label',
+    label: 'fallback-label',
+    description: '',
+    supportedReasoningEfforts: [],
+    defaultReasoningEffort: '',
+    isDefault: false,
+  },
+]);
 assert.deepStrictEqual(codex._internal.uniqueReasoningEfforts(['low', 'low', 'extra-high', 'bad']), ['low', 'xhigh']);
 assert.strictEqual(codex._internal.codexReasoningInputNeedsLookup('2'), true);
 assert.strictEqual(codex._internal.codexReasoningInputNeedsLookup('high'), false);

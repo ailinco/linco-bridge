@@ -1,4 +1,8 @@
 const DEFAULT_CODEX_REASONING_EFFORT = 'high';
+const MAX_CAPABILITY_ID_LENGTH = 120;
+const MAX_CAPABILITY_LABEL_LENGTH = 200;
+const MAX_CAPABILITY_DESCRIPTION_LENGTH = 1000;
+const ASCII_CONTROL_CHARACTER = /[\x00-\x1f\x7f]/;
 
 function codexTurnModelOverride(session) {
   if (!session.codexModelOverrideDirty) return {};
@@ -76,20 +80,78 @@ function normalizeCodexModelEntries(result) {
         : Array.isArray(result?.items)
           ? result.items
           : [];
-  return source.map(item => {
-    const name = String(item?.id || item?.model || item?.displayName || item?.name || item || '').trim();
-    const supportedReasoningEfforts = Array.isArray(item?.supportedReasoningEfforts)
-      ? item.supportedReasoningEfforts
-          .map(option => normalizeCodexReasoningEffort(option?.reasoningEffort || option?.effort || option))
-          .filter(Boolean)
-      : [];
-    return {
+  const entries = [];
+  const seen = new Set();
+  for (const item of source) {
+    const rawName = item && typeof item === 'object'
+      ? item.id || item.model || item.name
+      : item;
+    const name = safeCapabilityId(rawName);
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+
+    const supportedReasoningEfforts = normalizeCodexReasoningOptions(item?.supportedReasoningEfforts);
+    const requestedDefault = safeCapabilityId(
+      item?.defaultReasoningEffort || item?.defaultEffort,
+      normalizeCodexReasoningEffort
+    );
+    const defaultReasoningEffort = supportedReasoningEfforts.some(option => option.id === requestedDefault)
+      ? requestedDefault
+      : supportedReasoningEfforts[0]?.id || '';
+    entries.push({
       name,
+      label: firstBoundedText([item?.displayName, item?.label, item?.name], MAX_CAPABILITY_LABEL_LENGTH) || name,
+      description: boundedText(item?.description, MAX_CAPABILITY_DESCRIPTION_LENGTH),
       supportedReasoningEfforts,
-      defaultReasoningEffort: normalizeCodexReasoningEffort(item?.defaultReasoningEffort || item?.defaultEffort || ''),
+      defaultReasoningEffort,
       isDefault: Boolean(item?.isDefault),
-    };
-  }).filter(entry => entry.name);
+    });
+  }
+  return entries;
+}
+
+function normalizeCodexReasoningOptions(options) {
+  if (!Array.isArray(options)) return [];
+  const normalizedOptions = [];
+  const seen = new Set();
+  for (const option of options) {
+    const rawId = option && typeof option === 'object'
+      ? option.reasoningEffort || option.effort || option.id
+      : option;
+    const id = safeCapabilityId(rawId, normalizeCodexReasoningEffort);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    normalizedOptions.push({
+      id,
+      label: firstBoundedText([option?.label, option?.displayName], MAX_CAPABILITY_LABEL_LENGTH)
+        || formatCodexReasoningEffortLabel(id),
+      description: boundedText(option?.description, MAX_CAPABILITY_DESCRIPTION_LENGTH),
+    });
+  }
+  return normalizedOptions;
+}
+
+function safeCapabilityId(value, normalize = raw => raw) {
+  if (value === undefined || value === null) return '';
+  const raw = String(value);
+  if (ASCII_CONTROL_CHARACTER.test(raw)) return '';
+  const normalized = String(normalize(raw.trim()) || '').trim();
+  if (!normalized || normalized.length > MAX_CAPABILITY_ID_LENGTH || ASCII_CONTROL_CHARACTER.test(normalized)) return '';
+  return normalized;
+}
+
+function boundedText(value, maxLength) {
+  if (value === undefined || value === null) return '';
+  return String(value).trim().slice(0, maxLength);
+}
+
+function firstBoundedText(values, maxLength) {
+  for (const value of values) {
+    const text = boundedText(value, maxLength);
+    if (text) return text;
+  }
+  return '';
 }
 
 function findCodexModelEntry(entries, model) {
@@ -175,6 +237,8 @@ function uniqueReasoningEfforts(efforts) {
 function formatCodexReasoningEffortLabel(effort) {
   const normalized = normalizeCodexReasoningEffort(effort);
   if (normalized === 'xhigh') return 'Extra High';
+  if (normalized === 'max') return 'Max';
+  if (normalized === 'ultra') return 'Ultra';
   if (normalized === 'minimal') return 'Minimal';
   if (normalized === 'none') return 'None';
   if (normalized === 'low') return 'Low';
@@ -219,6 +283,7 @@ module.exports = {
   normalizeCodexModelEntries,
   normalizeCodexModelList,
   normalizeCodexReasoningEffort,
+  normalizeCodexReasoningOptions,
   resolveModelNameFromList,
   uniqueReasoningEfforts,
   withCodexFallbackModels,
