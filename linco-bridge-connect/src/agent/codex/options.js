@@ -100,9 +100,10 @@ function normalizeCodexModelEntries(result) {
       item?.defaultReasoningEffort || item?.defaultEffort,
       normalizeCodexReasoningEffort
     );
-    const defaultReasoningEffort = supportedReasoningEfforts.some(option => option.id === requestedDefault)
-      ? requestedDefault
-      : supportedReasoningEfforts[0]?.id || '';
+    let defaultReasoningEffort = requestedDefault;
+    if (hasReasoningEffortMetadata && !supportedReasoningEfforts.some(option => option.id === requestedDefault)) {
+      defaultReasoningEffort = supportedReasoningEfforts[0]?.id || '';
+    }
     entries.push({
       name,
       label: firstBoundedText([item?.displayName, item?.label, item?.name], MAX_CAPABILITY_LABEL_LENGTH) || name,

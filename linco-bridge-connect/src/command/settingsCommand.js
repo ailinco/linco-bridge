@@ -168,10 +168,11 @@ function buildCodexModelItem(entry, connectorDefaultEffort, compatibleReasoningO
   const supportedReasoningEfforts = entry.hasReasoningEffortMetadata
     ? entry.supportedReasoningEfforts.map(option => reasoningOptionFromId(option.id, option))
     : compatibleReasoningOptions;
-  const requestedDefault = entry.defaultReasoningEffort || connectorDefaultEffort;
-  const defaultReasoningEffort = supportedReasoningEfforts.some(option => option.id === requestedDefault)
-    ? requestedDefault
-    : supportedReasoningEfforts[0]?.id || '';
+  const supportedEffortIds = new Set(supportedReasoningEfforts.map(option => option.id));
+  const defaultReasoningEffort = [entry.defaultReasoningEffort, connectorDefaultEffort]
+    .find(effort => supportedEffortIds.has(effort))
+    || supportedReasoningEfforts[0]?.id
+    || '';
   return {
     id: entry.name,
     label: entry.label,

@@ -262,7 +262,7 @@ const codexSettingsTest = (async () => {
     codexModelOverride: '',
   };
   const configuredModelConfig = {
-    agents: { codex: { mode: 'app-server', model: 'CODEX-SOL', reasoningEffort: 'medium' } },
+    agents: { codex: { mode: 'app-server', model: 'CODEX-SOL', reasoningEffort: 'high' } },
     logger: config.logger,
   };
   assert.strictEqual(handleSlashCommand('getModelsAndReasons', defaultOnlyWs, defaultOnlySession, configuredModelConfig), true);
@@ -270,8 +270,9 @@ const codexSettingsTest = (async () => {
   const defaultOnlyRpc = JSON.parse(defaultOnlyChild.stdin.written[0]);
   defaultOnlySession.codexPendingRequests.get(defaultOnlyRpc.id).resolve({
     models: [
-      { id: 'codex-sol' },
-      { id: 'codex-explicit-empty', supportedReasoningEfforts: [] },
+      { id: 'codex-sol', defaultReasoningEffort: 'low' },
+      { id: 'codex-missing-list-ultra', defaultReasoningEffort: 'ultra' },
+      { id: 'codex-explicit-empty', defaultReasoningEffort: 'low', supportedReasoningEfforts: [] },
     ],
   });
   await new Promise(resolve => setImmediate(resolve));
@@ -285,8 +286,15 @@ const codexSettingsTest = (async () => {
     'high',
     'xhigh',
   ]);
-  assert.strictEqual(defaultOnlyResult.data.model.items[0].defaultReasoningEffort, 'medium');
-  assert.deepStrictEqual(defaultOnlyResult.data.model.items[1], {
+  assert.strictEqual(defaultOnlyResult.data.model.items[0].defaultReasoningEffort, 'low');
+  assert.deepStrictEqual(defaultOnlyResult.data.model.items[1].supportedReasoningEfforts.map(item => item.id), [
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+  ]);
+  assert.strictEqual(defaultOnlyResult.data.model.items[1].defaultReasoningEffort, 'high');
+  assert.deepStrictEqual(defaultOnlyResult.data.model.items[2], {
     id: 'codex-explicit-empty',
     label: 'codex-explicit-empty',
     command: '/model codex-explicit-empty',
@@ -730,8 +738,8 @@ assert.deepStrictEqual(codex._internal.normalizeCodexModelEntries({
 assert.deepStrictEqual(
   codex._internal.normalizeCodexModelEntries({
     models: [
-      { id: 'missing-reasoning-metadata' },
-      { id: 'explicit-empty-reasoning-metadata', supportedReasoningEfforts: [] },
+      { id: 'missing-reasoning-metadata', defaultReasoningEffort: 'low' },
+      { id: 'explicit-empty-reasoning-metadata', defaultReasoningEffort: 'low', supportedReasoningEfforts: [] },
     ],
   }).map(entry => ({
     name: entry.name,
@@ -743,7 +751,7 @@ assert.deepStrictEqual(
     {
       name: 'missing-reasoning-metadata',
       supportedReasoningEfforts: [],
-      defaultReasoningEffort: '',
+      defaultReasoningEffort: 'low',
       hasReasoningEffortMetadata: false,
     },
     {
