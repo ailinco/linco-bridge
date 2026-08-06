@@ -226,6 +226,61 @@ test('codex /settings apply does not mutate state when model capabilities cannot
   assert.equal(ws.sent.at(-1).reason, 'error');
 });
 
+test('codex /settings apply rejects reasoning for an implicit runtime model with explicit empty capabilities', async () => {
+  const modelLists = [
+    {
+      models: [
+        { id: 'capable-first', supportedReasoningEfforts: ['high'] },
+        { id: 'runtime-default-empty', isDefault: true, supportedReasoningEfforts: [] },
+      ],
+    },
+    {
+      models: [
+        { id: 'runtime-first-empty', supportedReasoningEfforts: [] },
+        { id: 'capable-second', supportedReasoningEfforts: ['high'] },
+      ],
+    },
+  ];
+
+  for (const modelList of modelLists) {
+    const { child, config, session, ws } = makeCodexApplyHarness({
+      codexModelOverride: '',
+      codexReasoningEffortOverride: 'low',
+    });
+    config.agents.codex.model = '';
+    config.agents.codex.reasoningEffort = 'low';
+
+    assert.equal(handleSlashCommand('/settings apply --reasoning high', ws, session, config), true);
+    await resolveNextModelList(session, child, modelList);
+
+    assert.equal(session.codexModelOverride, '');
+    assert.equal(session.codexReasoningEffortOverride, 'low');
+    assert.equal(session.codexModelOverrideDirty, false);
+    assert.equal(session.codexReasoningEffortDirty, false);
+    assert.equal(ws.sent.at(-1).reason, 'error');
+  }
+});
+
+test('codex /settings apply validates reasoning against the implicit first runtime model', async () => {
+  const { child, config, session, ws } = makeCodexApplyHarness({
+    codexModelOverride: '',
+    codexReasoningEffortOverride: 'low',
+  });
+  config.agents.codex.model = '';
+  config.agents.codex.reasoningEffort = 'low';
+
+  assert.equal(handleSlashCommand('/settings apply --reasoning ultra', ws, session, config), true);
+  await resolveNextModelList(session, child, {
+    models: [{ id: 'runtime-first-ultra', supportedReasoningEfforts: ['low', 'ultra'] }],
+  });
+
+  assert.equal(session.codexModelOverride, '');
+  assert.equal(session.codexReasoningEffortOverride, 'ultra');
+  assert.equal(session.codexModelOverrideDirty, false);
+  assert.equal(session.codexReasoningEffortDirty, true);
+  assert.equal(ws.sent.at(-1).reason, 'completed');
+});
+
 test('validateCodexSettingsCombination uses normalized model capabilities', () => {
   const entries = codex._internal.normalizeCodexModelEntries({
     models: [{ id: 'gpt-5.6-sol', supportedReasoningEfforts: [{ reasoningEffort: 'ULTRA' }] }],

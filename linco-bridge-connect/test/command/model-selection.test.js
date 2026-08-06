@@ -51,6 +51,15 @@ async function resolveNextModelList(session, child, result, options = {}) {
   await new Promise(resolve => setImmediate(resolve));
 }
 
+async function waitForWsEvent(ws, type) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const event = ws.sent.find(item => item.type === type);
+    if (event) return event;
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.fail(`expected ${type} event`);
+}
+
 {
   const lincoHome = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-model-session-'));
   const config = { lincoHome, sessionsDir: path.join(lincoHome, 'legacy'), attachmentsDirName: 'attachments' };
@@ -520,6 +529,35 @@ const codexReasoningCapabilitiesTest = (async () => {
   assert.strictEqual(fallbackRejectedSession.codexReasoningEffortOverride, 'high');
   assert.strictEqual(fallbackRejectedSession.codexReasoningEffortDirty, false);
   assert.strictEqual(fallbackRejectedWs.sent.at(-1).reason, 'error');
+
+  const startupFailedWs = createCaptureWs();
+  const startupFailedSession = {
+    id: 'session-codex-reasoning-startup-failed',
+    workspace: process.cwd(),
+    linco: { messageId: 'm-codex-reasoning-startup-failed', streamId: 'linco-stream-codex-reasoning-startup-failed' },
+    agentType: 'codex',
+    agentSessionId: 'codex-thread-1',
+    codexReasoningEffortOverride: 'low',
+    codexReasoningEffortDirty: false,
+    messageQueue: [],
+    agentSessionHistory: [],
+  };
+  const startupFailedConfig = {
+    agents: {
+      codex: {
+        mode: 'app-server',
+        model: 'gpt-5.5',
+        bin: path.join(os.tmpdir(), 'linco-codex-binary-that-does-not-exist.exe'),
+      },
+    },
+    logger: { info() {}, warn() {}, error() {} },
+  };
+  assert.strictEqual(handleSlashCommand('/reasoning high', startupFailedWs, startupFailedSession, startupFailedConfig), true);
+  const startupTurnEnd = await waitForWsEvent(startupFailedWs, 'turn_end');
+  assert.strictEqual(startupFailedSession.codexReasoningEffortOverride, 'low');
+  assert.strictEqual(startupFailedSession.codexReasoningEffortDirty, false);
+  assert.ok(startupFailedWs.sent.some(item => item.type === 'error'));
+  assert.strictEqual(startupTurnEnd.reason, 'error');
 })();
 
 {

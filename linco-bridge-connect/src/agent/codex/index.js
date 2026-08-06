@@ -237,10 +237,14 @@ async function applyCodexRuntimeSettings(ws, session, config, options = {}) {
   const requestedModel = modelInput && codexModelInputNeedsLookup(modelInput)
     ? resolveModelNameFromList(modelInput, modelNames)
     : modelInput;
-  const targetModel = requestedModel
+  const configuredTargetModel = requestedModel
     || session.codexModelOverride
     || config?.agents?.codex?.model
     || '';
+  const runtimeTargetEntry = configuredTargetModel
+    ? findCodexModelEntry(entries, configuredTargetModel)
+    : entries.find(entry => entry.isDefault) || entries[0] || null;
+  const targetModel = configuredTargetModel || runtimeTargetEntry?.name || '';
   const targetEntry = findCodexModelEntry(entries, targetModel);
   const availableEfforts = targetEntry
     ? reasoningIdsForEntry(targetEntry)
@@ -474,15 +478,19 @@ function sendCodexModelResult(ws, session, config, options = {}) {
 }
 
 async function applyCodexReasoningEffort(ws, session, config, effortInput) {
-  let choices;
+  await ensureAppServer(session, config);
+  let modelList;
   try {
-    choices = await loadCodexReasoningChoices(session, config);
+    modelList = await requestCodexModelList(session);
   } catch {
-    choices = {
+    modelList = null;
+  }
+  const choices = modelList === null
+    ? {
       efforts: codexFallbackReasoningEfforts(),
       hasAuthoritativeModelCapabilities: false,
-    };
-  }
+    }
+    : codexReasoningChoicesFromEntries(normalizeCodexModelEntries(modelList), session, config);
   const supportedEfforts = choices.hasAuthoritativeModelCapabilities
     ? choices.efforts
     : codexFallbackReasoningEfforts();
@@ -698,14 +706,25 @@ async function loadCodexActualModelNames(session, config) {
 
 async function loadCodexActualModelEntries(session, config) {
   await ensureAppServer(session, config);
-  const result = await rpcRequest(session, nextRpcId(session), 'model/list', { includeHidden: true, limit: 100 });
+  const result = await requestCodexModelList(session);
   return normalizeCodexModelEntries(result);
+}
+
+function requestCodexModelList(session) {
+  return rpcRequest(session, nextRpcId(session), 'model/list', { includeHidden: true, limit: 100 });
 }
 
 async function loadCodexReasoningChoices(session, config) {
   await ensureAppServer(session, config);
-  const result = await rpcRequest(session, nextRpcId(session), 'model/list', { includeHidden: true, limit: 100 });
-  const entries = normalizeCodexModelEntries(result);
+  return loadCodexReasoningChoicesFromReadyAppServer(session, config);
+}
+
+async function loadCodexReasoningChoicesFromReadyAppServer(session, config) {
+  const result = await requestCodexModelList(session);
+  return codexReasoningChoicesFromEntries(normalizeCodexModelEntries(result), session, config);
+}
+
+function codexReasoningChoicesFromEntries(entries, session, config) {
   const currentModel = String(session.codexModelOverride || config?.agents?.codex?.model || '').trim();
   const currentEntry = findCodexModelEntry(entries, currentModel);
   const selected = currentEntry || entries.find(entry => entry.isDefault) || entries[0] || null;
