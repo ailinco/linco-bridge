@@ -507,7 +507,12 @@ const codexReasoningCapabilitiesTest = (async () => {
     codexReasoningEffortDirty: false,
   };
   assert.strictEqual(handleSlashCommand('/reasoning high', fallbackWs, fallbackSession, config), true);
-  await resolveNextModelList(fallbackSession, fallbackChild, new Error('model list unavailable'), { reject: true });
+  await resolveNextModelList(
+    fallbackSession,
+    fallbackChild,
+    new codex._internal.CodexRpcMethodError('model/list', { code: -32601, message: 'model list unavailable' }),
+    { reject: true },
+  );
   assert.strictEqual(fallbackSession.codexReasoningEffortOverride, 'high');
   assert.strictEqual(fallbackSession.codexReasoningEffortDirty, true);
   assert.strictEqual(fallbackWs.sent.at(-1).type, 'turn_end');
@@ -525,10 +530,38 @@ const codexReasoningCapabilitiesTest = (async () => {
     codexReasoningEffortDirty: false,
   };
   assert.strictEqual(handleSlashCommand('/reasoning max', fallbackRejectedWs, fallbackRejectedSession, config), true);
-  await resolveNextModelList(fallbackRejectedSession, fallbackRejectedChild, new Error('model list unavailable'), { reject: true });
+  await resolveNextModelList(
+    fallbackRejectedSession,
+    fallbackRejectedChild,
+    new codex._internal.CodexRpcMethodError('model/list', { code: -32601, message: 'model list unavailable' }),
+    { reject: true },
+  );
   assert.strictEqual(fallbackRejectedSession.codexReasoningEffortOverride, 'high');
   assert.strictEqual(fallbackRejectedSession.codexReasoningEffortDirty, false);
   assert.strictEqual(fallbackRejectedWs.sent.at(-1).reason, 'error');
+
+  const transportClosedChild = fakeChild();
+  const transportClosedWs = createCaptureWs();
+  const transportClosedSession = {
+    ...session,
+    id: 'session-codex-reasoning-transport-closed',
+    linco: { messageId: 'm-codex-reasoning-transport-closed', streamId: 'linco-stream-codex-reasoning-transport-closed' },
+    codexAppServer: transportClosedChild,
+    codexPendingRequests: new Map(),
+    codexRpcId: 0,
+    codexReasoningEffortOverride: 'low',
+    codexReasoningEffortDirty: false,
+  };
+  assert.strictEqual(handleSlashCommand('/reasoning high', transportClosedWs, transportClosedSession, config), true);
+  await resolveNextModelList(
+    transportClosedSession,
+    transportClosedChild,
+    new Error('app-server exited during model/list'),
+    { reject: true },
+  );
+  assert.strictEqual(transportClosedSession.codexReasoningEffortOverride, 'low');
+  assert.strictEqual(transportClosedSession.codexReasoningEffortDirty, false);
+  assert.strictEqual(transportClosedWs.sent.at(-1).reason, 'error');
 
   const startupFailedWs = createCaptureWs();
   const startupFailedSession = {

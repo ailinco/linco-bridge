@@ -71,6 +71,19 @@ async function resolveNextModelList(session, child, result, options = {}) {
   await new Promise(resolve => setImmediate(resolve));
 }
 
+async function resolveNextRpc(session, child, method, result) {
+  let request;
+  for (let attempt = 0; attempt < 100 && !request; attempt += 1) {
+    await new Promise(resolve => setImmediate(resolve));
+    request = child.stdin.written
+      .map(line => JSON.parse(line))
+      .find(message => message.method === method && session.codexPendingRequests.has(message.id));
+  }
+  assert.ok(request, `expected a pending ${method} request; wrote ${child.stdin.written.join(' | ')}`);
+  session.codexPendingRequests.get(request.id).resolve(result);
+  await new Promise(resolve => setImmediate(resolve));
+}
+
 test('parseSettingsArgs parses composite apply command', () => {
   assert.deepEqual(
     parseSettingsArgs('apply --reasoning high --model gpt-5.5'),
@@ -198,9 +211,9 @@ test('codex /settings apply respects explicit empty reasoning capabilities', asy
   assert.equal(handleSlashCommand('/settings apply --model gpt-no-reasoning', modelOnly.ws, modelOnly.session, modelOnly.config), true);
   await resolveNextModelList(modelOnly.session, modelOnly.child, { models: entries });
   assert.equal(modelOnly.session.codexModelOverride, 'gpt-no-reasoning');
-  assert.equal(modelOnly.session.codexReasoningEffortOverride, 'high');
+  assert.equal(modelOnly.session.codexReasoningEffortOverride, null);
   assert.equal(modelOnly.session.codexModelOverrideDirty, true);
-  assert.equal(modelOnly.session.codexReasoningEffortDirty, false);
+  assert.equal(modelOnly.session.codexReasoningEffortDirty, true);
 
   const withReasoning = makeCodexApplyHarness();
   assert.equal(handleSlashCommand('/settings apply --reasoning high --model gpt-no-reasoning', withReasoning.ws, withReasoning.session, withReasoning.config), true);
@@ -210,6 +223,48 @@ test('codex /settings apply respects explicit empty reasoning capabilities', asy
   assert.equal(withReasoning.session.codexModelOverrideDirty, false);
   assert.equal(withReasoning.session.codexReasoningEffortDirty, false);
   assert.equal(withReasoning.ws.sent.at(-1).reason, 'error');
+});
+
+test('codex model-only apply sends an atomic compatible combination on the next turn', async () => {
+  const narrow = makeCodexApplyHarness();
+  assert.equal(handleSlashCommand('/settings apply --model gpt-narrow', narrow.ws, narrow.session, narrow.config), true);
+  await resolveNextModelList(narrow.session, narrow.child, {
+    models: [{
+      id: 'gpt-narrow',
+      defaultReasoningEffort: 'low',
+      supportedReasoningEfforts: ['low'],
+    }],
+  });
+  assert.equal(narrow.session.codexModelOverride, 'gpt-narrow');
+  assert.equal(narrow.session.codexReasoningEffortOverride, 'low');
+  assert.equal(narrow.session.codexModelOverrideDirty, true);
+  assert.equal(narrow.session.codexReasoningEffortDirty, true);
+
+  const narrowTurnWs = makeWs();
+  codex.execute('next turn', narrowTurnWs, narrow.session, narrow.config);
+  await resolveNextRpc(narrow.session, narrow.child, 'config/read', {});
+  await resolveNextRpc(narrow.session, narrow.child, 'thread/resume', { thread: { id: 'codex-thread-1' } });
+  const narrowTurn = narrow.child.stdin.written.map(line => JSON.parse(line)).find(message => message.method === 'turn/start');
+  assert.equal(narrowTurn.params.model, 'gpt-narrow');
+  assert.equal(narrowTurn.params.effort, 'low');
+
+  const empty = makeCodexApplyHarness();
+  assert.equal(handleSlashCommand('/settings apply --model gpt-no-reasoning', empty.ws, empty.session, empty.config), true);
+  await resolveNextModelList(empty.session, empty.child, {
+    models: [{ id: 'gpt-no-reasoning', supportedReasoningEfforts: [] }],
+  });
+  assert.equal(empty.session.codexModelOverride, 'gpt-no-reasoning');
+  assert.equal(empty.session.codexReasoningEffortOverride, null);
+  assert.equal(empty.session.codexModelOverrideDirty, true);
+  assert.equal(empty.session.codexReasoningEffortDirty, true);
+
+  const emptyTurnWs = makeWs();
+  codex.execute('next turn', emptyTurnWs, empty.session, empty.config);
+  await resolveNextRpc(empty.session, empty.child, 'config/read', {});
+  await resolveNextRpc(empty.session, empty.child, 'thread/resume', { thread: { id: 'codex-thread-1' } });
+  const emptyTurn = empty.child.stdin.written.map(line => JSON.parse(line)).find(message => message.method === 'turn/start');
+  assert.equal(emptyTurn.params.model, 'gpt-no-reasoning');
+  assert.equal(Object.prototype.hasOwnProperty.call(emptyTurn.params, 'effort'), false);
 });
 
 test('codex /settings apply does not mutate state when model capabilities cannot be loaded', async () => {

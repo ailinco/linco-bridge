@@ -12,6 +12,12 @@ function codexTurnModelOverride(session) {
 }
 
 function codexTurnReasoningOverride(session, agentConfig = {}, options = {}) {
+  if (session.codexOmitReasoningEffortForNextTurn) {
+    session.codexOmitReasoningEffortForNextTurn = false;
+    session.codexReasoningEffortDirty = false;
+    session.codexActiveReasoningEffort = '';
+    return {};
+  }
   if (!session.codexReasoningEffortDirty && !options.includeDefault) return {};
   const effort = normalizeCodexReasoningEffort(session.codexReasoningEffortOverride || '')
     || (options.includeDefault ? codexDefaultReasoningEffort(agentConfig) : '');
