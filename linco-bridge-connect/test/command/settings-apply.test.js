@@ -77,7 +77,7 @@ test('Claude bridge settings expose versioned model reasoning capabilities', asy
   );
 
   assert.equal(payload.capabilitiesVersion, 2);
-  assert.equal(payload.reasoning.defaultEffort, 'low');
+  assert.equal(payload.reasoning.defaultEffort, 'high');
   assert.equal(payload.reasoning.options[0].command, '/reasoning low');
   assert.equal(payload.model.runtimeDefaultModelId, 'opus');
   assert.deepEqual(payload.model.items.map(item => item.id), [
@@ -101,24 +101,43 @@ test('Claude bridge settings expose versioned model reasoning capabilities', asy
   assert.equal(payload.model.items[0].supportedReasoningEfforts[4].label, 'Max');
   assert.equal(payload.model.items[0].supportedReasoningEfforts[4].description, 'Maximum reasoning effort');
   assert.deepEqual(payload.model.items.map(item => item.defaultReasoningEffort), [
-    'low',
-    'low',
-    'low',
-    'low',
-    'low',
+    'high',
+    'high',
+    'high',
+    'high',
+    'high',
   ]);
 
+  const emptyConfig = { agents: { claude: {} } };
   const fallbackPayload = await buildBridgeSettingsPayload(
     { agentType: 'claude' },
-    { agents: { claude: { model: 'not-a-claude-model' } } },
+    emptyConfig,
   );
-  assert.equal(fallbackPayload.reasoning.defaultEffort, 'low');
+  const reasoningWs = makeWs();
+  assert.equal(handleSlashCommand('/reasoning status', reasoningWs, { agentType: 'claude' }, emptyConfig), true);
+  const reasoningStatus = reasoningWs.sent.find(item => item.type === 'slash_command_result' && item.command === 'reasoning');
+  assert.equal(fallbackPayload.reasoning.defaultEffort, reasoningStatus.data.defaultEffort);
+  assert.equal(fallbackPayload.reasoning.defaultEffort, 'high');
   assert.equal(fallbackPayload.model.runtimeDefaultModelId, 'sonnet');
   assert.deepEqual(fallbackPayload.model.items.map(item => item.defaultReasoningEffort), [
-    'low',
-    'low',
-    'low',
-    'low',
-    'low',
+    'high',
+    'high',
+    'high',
+    'high',
+    'high',
+  ]);
+
+  const configuredPayload = await buildBridgeSettingsPayload(
+    { agentType: 'claude' },
+    { agents: { claude: { effort: 'max', model: 'not-a-claude-model' } } },
+  );
+  assert.equal(configuredPayload.reasoning.defaultEffort, 'max');
+  assert.equal(configuredPayload.model.runtimeDefaultModelId, 'sonnet');
+  assert.deepEqual(configuredPayload.model.items.map(item => item.defaultReasoningEffort), [
+    'max',
+    'max',
+    'max',
+    'max',
+    'max',
   ]);
 });

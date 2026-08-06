@@ -91,6 +91,10 @@ function normalizeCodexModelEntries(result) {
     if (!name || seen.has(key)) continue;
     seen.add(key);
 
+    const hasReasoningEffortMetadata = Boolean(
+      item && typeof item === 'object'
+      && Object.prototype.hasOwnProperty.call(item, 'supportedReasoningEfforts')
+    );
     const supportedReasoningEfforts = normalizeCodexReasoningOptions(item?.supportedReasoningEfforts);
     const requestedDefault = safeCapabilityId(
       item?.defaultReasoningEffort || item?.defaultEffort,
@@ -106,6 +110,7 @@ function normalizeCodexModelEntries(result) {
       supportedReasoningEfforts,
       defaultReasoningEffort,
       isDefault: Boolean(item?.isDefault),
+      hasReasoningEffortMetadata,
     });
   }
   return entries;

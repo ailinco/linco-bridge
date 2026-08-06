@@ -1,5 +1,6 @@
 const { sendError } = require('../core/protocol');
 const claudeAgent = require('../agent/claude');
+const { DEFAULT_CLAUDE_EFFORT } = require('../agent/claude/options');
 const codexAgent = require('../agent/codex');
 const {
   GET_MODELS_AND_REASONS_COMMAND,
@@ -121,9 +122,12 @@ function buildClaudeSettingsPayload(session, config = {}) {
   const efforts = claudeAgent._internal.availableClaudeEfforts();
   const effortIds = efforts.map(effort => reasoningOptionFromId(effort.name).id);
   const configuredDefaultEffort = String(agentConfig.effort || '').trim().toLowerCase();
+  const fallbackDefaultEffort = effortIds.includes(DEFAULT_CLAUDE_EFFORT)
+    ? DEFAULT_CLAUDE_EFFORT
+    : effortIds[0] || '';
   const normalizedDefaultEffort = effortIds.includes(configuredDefaultEffort)
     ? configuredDefaultEffort
-    : effortIds[0] || '';
+    : fallbackDefaultEffort;
   const supportedReasoningEfforts = efforts.map(effort => reasoningOptionFromId(effort.name, {
     description: effort.desc,
   }));
@@ -161,7 +165,7 @@ function buildClaudeSettingsPayload(session, config = {}) {
 }
 
 function buildCodexModelItem(entry, connectorDefaultEffort, compatibleReasoningOptions) {
-  const supportedReasoningEfforts = entry.supportedReasoningEfforts.length
+  const supportedReasoningEfforts = entry.hasReasoningEffortMetadata
     ? entry.supportedReasoningEfforts.map(option => reasoningOptionFromId(option.id, option))
     : compatibleReasoningOptions;
   const requestedDefault = entry.defaultReasoningEffort || connectorDefaultEffort;

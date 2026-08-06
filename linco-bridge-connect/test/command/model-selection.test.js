@@ -269,7 +269,10 @@ const codexSettingsTest = (async () => {
   await new Promise(resolve => setImmediate(resolve));
   const defaultOnlyRpc = JSON.parse(defaultOnlyChild.stdin.written[0]);
   defaultOnlySession.codexPendingRequests.get(defaultOnlyRpc.id).resolve({
-    models: [{ id: 'codex-sol' }],
+    models: [
+      { id: 'codex-sol' },
+      { id: 'codex-explicit-empty', supportedReasoningEfforts: [] },
+    ],
   });
   await new Promise(resolve => setImmediate(resolve));
   const defaultOnlyResult = defaultOnlyWs.sent.find(item => item.type === 'slash_command_result');
@@ -283,6 +286,13 @@ const codexSettingsTest = (async () => {
     'xhigh',
   ]);
   assert.strictEqual(defaultOnlyResult.data.model.items[0].defaultReasoningEffort, 'medium');
+  assert.deepStrictEqual(defaultOnlyResult.data.model.items[1], {
+    id: 'codex-explicit-empty',
+    label: 'codex-explicit-empty',
+    command: '/model codex-explicit-empty',
+    defaultReasoningEffort: '',
+    supportedReasoningEfforts: [],
+  });
 })();
 
 {
@@ -659,6 +669,7 @@ assert.deepStrictEqual(codex._internal.normalizeCodexModelEntries({
   ],
   defaultReasoningEffort: 'ultra',
   isDefault: true,
+  hasReasoningEffortMetadata: true,
 }]);
 assert.deepStrictEqual(normalizeCodexReasoningOptions([
   { id: 'MAX' },
@@ -704,6 +715,7 @@ assert.deepStrictEqual(codex._internal.normalizeCodexModelEntries({
     ],
     defaultReasoningEffort: 'low',
     isDefault: false,
+    hasReasoningEffortMetadata: true,
   },
   {
     name: 'fallback-label',
@@ -712,8 +724,36 @@ assert.deepStrictEqual(codex._internal.normalizeCodexModelEntries({
     supportedReasoningEfforts: [],
     defaultReasoningEffort: '',
     isDefault: false,
+    hasReasoningEffortMetadata: false,
   },
 ]);
+assert.deepStrictEqual(
+  codex._internal.normalizeCodexModelEntries({
+    models: [
+      { id: 'missing-reasoning-metadata' },
+      { id: 'explicit-empty-reasoning-metadata', supportedReasoningEfforts: [] },
+    ],
+  }).map(entry => ({
+    name: entry.name,
+    supportedReasoningEfforts: entry.supportedReasoningEfforts,
+    defaultReasoningEffort: entry.defaultReasoningEffort,
+    hasReasoningEffortMetadata: entry.hasReasoningEffortMetadata,
+  })),
+  [
+    {
+      name: 'missing-reasoning-metadata',
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: '',
+      hasReasoningEffortMetadata: false,
+    },
+    {
+      name: 'explicit-empty-reasoning-metadata',
+      supportedReasoningEfforts: [],
+      defaultReasoningEffort: '',
+      hasReasoningEffortMetadata: true,
+    },
+  ],
+);
 assert.deepStrictEqual(codex._internal.uniqueReasoningEfforts(['low', 'low', 'extra-high', 'bad']), ['low', 'xhigh']);
 assert.strictEqual(codex._internal.codexReasoningInputNeedsLookup('2'), true);
 assert.strictEqual(codex._internal.codexReasoningInputNeedsLookup('high'), false);
