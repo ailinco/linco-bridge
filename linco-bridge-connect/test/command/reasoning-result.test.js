@@ -13,20 +13,46 @@ function createCaptureWs() {
   };
 }
 
-{
+function fakeChild() {
+  return {
+    stdin: {
+      destroyed: false,
+      written: [],
+      write(chunk) {
+        this.written.push(chunk);
+      },
+    },
+  };
+}
+
+const codexReasoningResultTest = (async () => {
   const ws = createCaptureWs();
+  const child = fakeChild();
   const session = {
     id: 'session-codex-reasoning-result',
     workspace: process.cwd(),
     linco: { messageId: 'm-codex-reasoning', streamId: 'linco-stream-codex-reasoning' },
     agentType: 'codex',
     agentSessionId: 'codex-thread-1',
+    codexAppServer: child,
+    codexPendingRequests: new Map(),
+    codexRpcId: 0,
     messageQueue: [],
     agentSessionHistory: [],
   };
   const config = { agents: { codex: { mode: 'app-server', model: 'gpt-5.5' } }, logger: { info() {}, warn() {}, error() {} } };
 
   assert.strictEqual(handleSlashCommand('/reasoning extra-high', ws, session, config), true);
+  await new Promise(resolve => setImmediate(resolve));
+  const rpc = JSON.parse(child.stdin.written[0]);
+  assert.strictEqual(rpc.method, 'model/list');
+  session.codexPendingRequests.get(rpc.id).resolve({
+    models: [{
+      id: 'gpt-5.5',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh'],
+    }],
+  });
+  await new Promise(resolve => setImmediate(resolve));
   assert.strictEqual(session.codexReasoningEffortOverride, 'xhigh');
   assert.deepStrictEqual(codex._internal.codexTurnReasoningOverride(session), { effort: 'xhigh' });
 
@@ -41,7 +67,7 @@ function createCaptureWs() {
   assert.deepStrictEqual(result.data.options.map(option => option.id), ['low', 'medium', 'high', 'xhigh']);
   assert.strictEqual(result.data.options[2].isDefault, true);
   assert.strictEqual(ws.sent.at(-1).type, 'turn_end');
-}
+})();
 
 {
   const params = codex._internal.buildCodexThreadStartParams({
@@ -182,3 +208,7 @@ function createCaptureWs() {
   assert.deepStrictEqual(result.data.options.map(option => option.id), ['low', 'medium', 'high', 'xhigh', 'max']);
   assert.strictEqual(result.data.options[2].isDefault, true);
 }
+
+codexReasoningResultTest.then(() => {
+  console.log('reasoning result ok');
+});

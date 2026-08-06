@@ -7,6 +7,7 @@ const {
   GET_MODELS_AND_REASONS_COMMAND,
   parseSettingsArgs,
 } = require('../../src/command/settings');
+const codex = require('../../src/agent/codex');
 
 function makeWs() {
   const sent = [];
@@ -17,6 +18,57 @@ function makeWs() {
       sent.push(JSON.parse(payload));
     },
   };
+}
+
+function fakeChild() {
+  return {
+    stdin: {
+      destroyed: false,
+      written: [],
+      write(chunk) {
+        this.written.push(chunk);
+      },
+    },
+  };
+}
+
+function makeCodexApplyHarness(overrides = {}) {
+  const child = fakeChild();
+  const ws = makeWs();
+  const session = {
+    id: 'session-codex-settings-apply',
+    workspace: process.cwd(),
+    linco: { messageId: 'm-codex-settings-apply', streamId: 'linco-stream-codex-settings-apply' },
+    agentType: 'codex',
+    agentSessionId: 'codex-thread-1',
+    codexAppServer: child,
+    codexPendingRequests: new Map(),
+    codexRpcId: 0,
+    codexModelOverride: 'gpt-5.5',
+    codexReasoningEffortOverride: 'high',
+    codexModelOverrideDirty: false,
+    codexReasoningEffortDirty: false,
+    messageQueue: [],
+    agentSessionHistory: [],
+    ...overrides,
+  };
+  const config = {
+    agents: { codex: { mode: 'app-server', model: 'gpt-5.5', reasoningEffort: 'high' } },
+    logger: { info() {}, warn() {}, error() {} },
+  };
+  return { child, config, session, ws };
+}
+
+async function resolveNextModelList(session, child, result, options = {}) {
+  await new Promise(resolve => setImmediate(resolve));
+  const request = child.stdin.written
+    .map(line => JSON.parse(line))
+    .find(message => message.method === 'model/list' && session.codexPendingRequests.has(message.id));
+  assert.ok(request, 'expected a pending model/list request');
+  const pending = session.codexPendingRequests.get(request.id);
+  if (options.reject) pending.reject(result);
+  else pending.resolve(result);
+  await new Promise(resolve => setImmediate(resolve));
 }
 
 test('parseSettingsArgs parses composite apply command', () => {
@@ -68,6 +120,121 @@ test('claude /settings apply updates model and effort with one restart', () => {
   assert.equal(result?.command, GET_MODELS_AND_REASONS_COMMAND);
   assert.equal(result?.data?.reasoning?.current, 'high');
   assert.equal(result?.data?.model?.current, 'opus');
+});
+
+test('codex /settings apply validates the complete model-effort combination before mutating state', async () => {
+  const { child, config, session, ws } = makeCodexApplyHarness();
+
+  assert.equal(handleSlashCommand('/settings apply --reasoning ultra --model gpt-5.6-luna', ws, session, config), true);
+  await resolveNextModelList(session, child, {
+    models: [{
+      id: 'gpt-5.6-luna',
+      supportedReasoningEfforts: [
+        { reasoningEffort: 'low' },
+        { reasoningEffort: 'medium' },
+        { reasoningEffort: 'max' },
+      ],
+    }],
+  });
+
+  assert.equal(session.codexModelOverride, 'gpt-5.5');
+  assert.equal(session.codexReasoningEffortOverride, 'high');
+  assert.equal(session.codexModelOverrideDirty, false);
+  assert.equal(session.codexReasoningEffortDirty, false);
+  assert.match(ws.sent.find(item => item.type === 'error')?.text || '', /ultra/i);
+  assert.equal(ws.sent.at(-1).type, 'turn_end');
+  assert.equal(ws.sent.at(-1).reason, 'error');
+});
+
+test('codex /settings apply atomically applies model-specific max and ultra capabilities', async () => {
+  const { child, config, session, ws } = makeCodexApplyHarness();
+
+  assert.equal(handleSlashCommand('/settings apply --reasoning ULTRA --model gpt-5.6-sol', ws, session, config), true);
+  await resolveNextModelList(session, child, {
+    models: [{
+      id: 'gpt-5.6-sol',
+      defaultReasoningEffort: 'low',
+      supportedReasoningEfforts: [
+        { reasoningEffort: 'low' },
+        { reasoningEffort: 'ultra' },
+      ],
+    }],
+  });
+
+  assert.equal(session.codexModelOverride, 'gpt-5.6-sol');
+  assert.equal(session.codexReasoningEffortOverride, 'ultra');
+  assert.equal(session.codexModelOverrideDirty, true);
+  assert.equal(session.codexReasoningEffortDirty, true);
+  const result = ws.sent.find(item => item.type === 'slash_command_result');
+  assert.equal(result.data.model.current, 'gpt-5.6-sol');
+  assert.equal(result.data.reasoning.current, 'ultra');
+  assert.equal(child.stdin.written.filter(line => JSON.parse(line).method === 'model/list').length, 1);
+});
+
+test('codex /settings apply keeps legacy reasoning validation for unknown custom models', async () => {
+  const { child, config, session, ws } = makeCodexApplyHarness();
+
+  assert.equal(handleSlashCommand('/settings apply --reasoning high --model provider/custom', ws, session, config), true);
+  await resolveNextModelList(session, child, {
+    models: [{ id: 'gpt-5.6-sol', supportedReasoningEfforts: [{ reasoningEffort: 'ultra' }] }],
+  });
+
+  assert.equal(session.codexModelOverride, 'provider/custom');
+  assert.equal(session.codexReasoningEffortOverride, 'high');
+  assert.equal(session.codexModelOverrideDirty, true);
+  assert.equal(session.codexReasoningEffortDirty, true);
+  assert.equal(ws.sent.at(-1).type, 'turn_end');
+  assert.notEqual(ws.sent.at(-1).reason, 'error');
+});
+
+test('codex /settings apply respects explicit empty reasoning capabilities', async () => {
+  const entries = [{
+    id: 'gpt-no-reasoning',
+    defaultReasoningEffort: 'low',
+    supportedReasoningEfforts: [],
+  }];
+
+  const modelOnly = makeCodexApplyHarness();
+  assert.equal(handleSlashCommand('/settings apply --model gpt-no-reasoning', modelOnly.ws, modelOnly.session, modelOnly.config), true);
+  await resolveNextModelList(modelOnly.session, modelOnly.child, { models: entries });
+  assert.equal(modelOnly.session.codexModelOverride, 'gpt-no-reasoning');
+  assert.equal(modelOnly.session.codexReasoningEffortOverride, 'high');
+  assert.equal(modelOnly.session.codexModelOverrideDirty, true);
+  assert.equal(modelOnly.session.codexReasoningEffortDirty, false);
+
+  const withReasoning = makeCodexApplyHarness();
+  assert.equal(handleSlashCommand('/settings apply --reasoning high --model gpt-no-reasoning', withReasoning.ws, withReasoning.session, withReasoning.config), true);
+  await resolveNextModelList(withReasoning.session, withReasoning.child, { models: entries });
+  assert.equal(withReasoning.session.codexModelOverride, 'gpt-5.5');
+  assert.equal(withReasoning.session.codexReasoningEffortOverride, 'high');
+  assert.equal(withReasoning.session.codexModelOverrideDirty, false);
+  assert.equal(withReasoning.session.codexReasoningEffortDirty, false);
+  assert.equal(withReasoning.ws.sent.at(-1).reason, 'error');
+});
+
+test('codex /settings apply does not mutate state when model capabilities cannot be loaded', async () => {
+  const { child, config, session, ws } = makeCodexApplyHarness();
+
+  assert.equal(handleSlashCommand('/settings apply --reasoning high --model gpt-5.6-sol', ws, session, config), true);
+  await resolveNextModelList(session, child, new Error('model list unavailable'), { reject: true });
+
+  assert.equal(session.codexModelOverride, 'gpt-5.5');
+  assert.equal(session.codexReasoningEffortOverride, 'high');
+  assert.equal(session.codexModelOverrideDirty, false);
+  assert.equal(session.codexReasoningEffortDirty, false);
+  assert.match(ws.sent.find(item => item.type === 'error')?.text || '', /model list unavailable/);
+  assert.equal(ws.sent.at(-1).reason, 'error');
+});
+
+test('validateCodexSettingsCombination uses normalized model capabilities', () => {
+  const entries = codex._internal.normalizeCodexModelEntries({
+    models: [{ id: 'gpt-5.6-sol', supportedReasoningEfforts: [{ reasoningEffort: 'ULTRA' }] }],
+  });
+
+  assert.deepEqual(
+    codex._internal.validateCodexSettingsCombination({ entries, model: 'GPT-5.6-SOL', effort: 'ULTRA' }),
+    { model: 'gpt-5.6-sol', effort: 'ultra' },
+  );
 });
 
 test('Claude bridge settings expose versioned model reasoning capabilities', async () => {

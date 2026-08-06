@@ -39,6 +39,18 @@ function fakeChild() {
   };
 }
 
+async function resolveNextModelList(session, child, result, options = {}) {
+  await new Promise(resolve => setImmediate(resolve));
+  const request = child.stdin.written
+    .map(line => JSON.parse(line))
+    .find(message => message.method === 'model/list' && session.codexPendingRequests.has(message.id));
+  assert.ok(request, 'expected a pending model/list request');
+  const pending = session.codexPendingRequests.get(request.id);
+  if (options.reject) pending.reject(result);
+  else pending.resolve(result);
+  await new Promise(resolve => setImmediate(resolve));
+}
+
 {
   const lincoHome = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-model-session-'));
   const config = { lincoHome, sessionsDir: path.join(lincoHome, 'legacy'), attachmentsDirName: 'attachments' };
@@ -322,7 +334,8 @@ const codexSettingsTest = (async () => {
   assert.deepStrictEqual(codex._internal.codexTurnModelOverride(session), { model: null });
 }
 
-{
+const codexReasoningCapabilitiesTest = (async () => {
+  const child = fakeChild();
   const ws = createCaptureWs();
   const session = {
     id: 'session-codex-reasoning',
@@ -330,19 +343,184 @@ const codexSettingsTest = (async () => {
     linco: { messageId: 'm-codex-reasoning', streamId: 'linco-stream-codex-reasoning' },
     agentType: 'codex',
     agentSessionId: 'codex-thread-1',
+    codexAppServer: child,
+    codexPendingRequests: new Map(),
+    codexRpcId: 0,
     messageQueue: [],
     agentSessionHistory: [],
   };
   const config = { agents: { codex: { mode: 'app-server', model: 'gpt-5.5' } }, logger: { info() {}, warn() {}, error() {} } };
 
   assert.strictEqual(handleSlashCommand('/reasoning extra-high', ws, session, config), true);
+  await resolveNextModelList(session, child, {
+    models: [{
+      id: 'gpt-5.5',
+      supportedReasoningEfforts: [
+        { reasoningEffort: 'low' },
+        { reasoningEffort: 'medium' },
+        { reasoningEffort: 'high' },
+        { reasoningEffort: 'xhigh' },
+      ],
+    }],
+  });
   assert.strictEqual(session.agentSessionId, 'codex-thread-1');
   assert.strictEqual(session.codexReasoningEffortOverride, 'xhigh');
   assert.strictEqual(session.codexReasoningEffortDirty, true);
   assert.deepStrictEqual(codex._internal.codexTurnReasoningOverride(session), { effort: 'xhigh' });
   assert.deepStrictEqual(codex._internal.codexTurnReasoningOverride(session), {});
   assert.strictEqual(ws.sent.at(-1).type, 'turn_end');
-}
+
+  const statusChild = fakeChild();
+  const statusWs = createCaptureWs();
+  const statusSession = {
+    ...session,
+    id: 'session-codex-reasoning-status-capabilities',
+    linco: { messageId: 'm-codex-reasoning-status-capabilities', streamId: 'linco-stream-codex-reasoning-status-capabilities' },
+    codexAppServer: statusChild,
+    codexPendingRequests: new Map(),
+    codexRpcId: 0,
+    codexModelOverride: 'codex-sol',
+    codexReasoningEffortOverride: '',
+    codexReasoningEffortDirty: false,
+  };
+  assert.strictEqual(handleSlashCommand('/reasoning status', statusWs, statusSession, config), true);
+  await resolveNextModelList(statusSession, statusChild, {
+    models: [
+      {
+        id: 'codex-sol',
+        defaultReasoningEffort: 'low',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      },
+      {
+        id: 'codex-terra',
+        isDefault: true,
+        defaultReasoningEffort: 'medium',
+        supportedReasoningEfforts: ['low', 'medium'],
+      },
+    ],
+  });
+  const statusResult = statusWs.sent.find(item => item.type === 'slash_command_result');
+  assert.deepStrictEqual(statusResult.data.options.map(item => item.id), ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+  assert.strictEqual(statusResult.data.defaultEffort, 'low');
+  assert.strictEqual(statusResult.data.model, 'codex-sol');
+
+  const supportedChild = fakeChild();
+  const supportedWs = createCaptureWs();
+  const supportedSession = {
+    ...session,
+    id: 'session-codex-reasoning-supported-ultra',
+    linco: { messageId: 'm-codex-reasoning-supported-ultra', streamId: 'linco-stream-codex-reasoning-supported-ultra' },
+    codexAppServer: supportedChild,
+    codexPendingRequests: new Map(),
+    codexRpcId: 0,
+    codexModelOverride: 'codex-sol',
+    codexReasoningEffortOverride: 'high',
+    codexReasoningEffortDirty: false,
+  };
+  assert.strictEqual(handleSlashCommand('/reasoning ultra', supportedWs, supportedSession, config), true);
+  await resolveNextModelList(supportedSession, supportedChild, {
+    models: [{ id: 'codex-sol', supportedReasoningEfforts: ['low', 'ultra'] }],
+  });
+  assert.strictEqual(supportedSession.codexReasoningEffortOverride, 'ultra');
+  assert.strictEqual(supportedSession.codexReasoningEffortDirty, true);
+
+  const rejectedChild = fakeChild();
+  const rejectedWs = createCaptureWs();
+  const rejectedSession = {
+    ...session,
+    id: 'session-codex-reasoning-rejected-ultra',
+    linco: { messageId: 'm-codex-reasoning-rejected-ultra', streamId: 'linco-stream-codex-reasoning-rejected-ultra' },
+    codexAppServer: rejectedChild,
+    codexPendingRequests: new Map(),
+    codexRpcId: 0,
+    codexModelOverride: 'gpt-5.6-luna',
+    codexReasoningEffortOverride: 'high',
+    codexReasoningEffortDirty: false,
+  };
+  assert.strictEqual(handleSlashCommand('/reasoning ultra', rejectedWs, rejectedSession, config), true);
+  await resolveNextModelList(rejectedSession, rejectedChild, {
+    models: [{ id: 'gpt-5.6-luna', supportedReasoningEfforts: ['low', 'medium', 'max'] }],
+  });
+  assert.strictEqual(rejectedSession.codexReasoningEffortOverride, 'high');
+  assert.strictEqual(rejectedSession.codexReasoningEffortDirty, false);
+  assert.strictEqual(rejectedWs.sent.at(-1).type, 'turn_end');
+  assert.strictEqual(rejectedWs.sent.at(-1).reason, 'error');
+
+  const emptyChild = fakeChild();
+  const emptyWs = createCaptureWs();
+  const emptySession = {
+    ...session,
+    id: 'session-codex-reasoning-explicit-empty',
+    linco: { messageId: 'm-codex-reasoning-explicit-empty', streamId: 'linco-stream-codex-reasoning-explicit-empty' },
+    codexAppServer: emptyChild,
+    codexPendingRequests: new Map(),
+    codexRpcId: 0,
+    codexModelOverride: 'gpt-no-reasoning',
+    codexReasoningEffortOverride: '',
+    codexReasoningEffortDirty: false,
+  };
+  assert.strictEqual(handleSlashCommand('/reasoning', emptyWs, emptySession, config), true);
+  await resolveNextModelList(emptySession, emptyChild, {
+    models: [{ id: 'gpt-no-reasoning', defaultReasoningEffort: 'low', supportedReasoningEfforts: [] }],
+  });
+  const emptyResult = emptyWs.sent.find(item => item.type === 'slash_command_result');
+  assert.deepStrictEqual(emptyResult.data.options, []);
+  assert.strictEqual(emptyResult.data.defaultEffort, '');
+
+  const emptySetChild = fakeChild();
+  const emptySetWs = createCaptureWs();
+  const emptySetSession = {
+    ...emptySession,
+    id: 'session-codex-reasoning-explicit-empty-set',
+    linco: { messageId: 'm-codex-reasoning-explicit-empty-set', streamId: 'linco-stream-codex-reasoning-explicit-empty-set' },
+    codexAppServer: emptySetChild,
+    codexPendingRequests: new Map(),
+    codexRpcId: 0,
+  };
+  assert.strictEqual(handleSlashCommand('/reasoning high', emptySetWs, emptySetSession, config), true);
+  await resolveNextModelList(emptySetSession, emptySetChild, {
+    models: [{ id: 'gpt-no-reasoning', supportedReasoningEfforts: [] }],
+  });
+  assert.strictEqual(emptySetSession.codexReasoningEffortOverride, '');
+  assert.strictEqual(emptySetSession.codexReasoningEffortDirty, false);
+  assert.strictEqual(emptySetWs.sent.at(-1).reason, 'error');
+
+  const fallbackChild = fakeChild();
+  const fallbackWs = createCaptureWs();
+  const fallbackSession = {
+    ...session,
+    id: 'session-codex-reasoning-list-fallback',
+    linco: { messageId: 'm-codex-reasoning-list-fallback', streamId: 'linco-stream-codex-reasoning-list-fallback' },
+    codexAppServer: fallbackChild,
+    codexPendingRequests: new Map(),
+    codexRpcId: 0,
+    codexReasoningEffortOverride: '',
+    codexReasoningEffortDirty: false,
+  };
+  assert.strictEqual(handleSlashCommand('/reasoning high', fallbackWs, fallbackSession, config), true);
+  await resolveNextModelList(fallbackSession, fallbackChild, new Error('model list unavailable'), { reject: true });
+  assert.strictEqual(fallbackSession.codexReasoningEffortOverride, 'high');
+  assert.strictEqual(fallbackSession.codexReasoningEffortDirty, true);
+  assert.strictEqual(fallbackWs.sent.at(-1).type, 'turn_end');
+
+  const fallbackRejectedChild = fakeChild();
+  const fallbackRejectedWs = createCaptureWs();
+  const fallbackRejectedSession = {
+    ...fallbackSession,
+    id: 'session-codex-reasoning-list-fallback-rejected',
+    linco: { messageId: 'm-codex-reasoning-list-fallback-rejected', streamId: 'linco-stream-codex-reasoning-list-fallback-rejected' },
+    codexAppServer: fallbackRejectedChild,
+    codexPendingRequests: new Map(),
+    codexRpcId: 0,
+    codexReasoningEffortOverride: 'high',
+    codexReasoningEffortDirty: false,
+  };
+  assert.strictEqual(handleSlashCommand('/reasoning max', fallbackRejectedWs, fallbackRejectedSession, config), true);
+  await resolveNextModelList(fallbackRejectedSession, fallbackRejectedChild, new Error('model list unavailable'), { reject: true });
+  assert.strictEqual(fallbackRejectedSession.codexReasoningEffortOverride, 'high');
+  assert.strictEqual(fallbackRejectedSession.codexReasoningEffortDirty, false);
+  assert.strictEqual(fallbackRejectedWs.sent.at(-1).reason, 'error');
+})();
 
 {
   const ws = createCaptureWs();
@@ -763,12 +941,18 @@ assert.deepStrictEqual(
   ],
 );
 assert.deepStrictEqual(codex._internal.uniqueReasoningEfforts(['low', 'low', 'extra-high', 'bad']), ['low', 'xhigh']);
+assert.deepStrictEqual(codex._internal.uniqueCapabilityReasoningEfforts([
+  { id: 'MAX' },
+  { id: 'ultra' },
+  { id: 'ULTRA' },
+  { id: 'provider-safe-effort' },
+]), ['max', 'ultra', 'provider-safe-effort']);
 assert.strictEqual(codex._internal.codexReasoningInputNeedsLookup('2'), true);
 assert.strictEqual(codex._internal.codexReasoningInputNeedsLookup('high'), false);
 assert.match(codex._internal.formatCodexReasoningList(['low', 'medium', 'high', 'xhigh'], '', { defaultEffort: 'medium', model: 'gpt-5.5' }), /2\. Medium \(default\)/);
 assert.strictEqual(typeof hermes.model, 'function');
 assert.strictEqual(typeof openclaw.model, 'function');
 
-codexSettingsTest.then(() => {
+Promise.all([codexSettingsTest, codexReasoningCapabilitiesTest]).then(() => {
   console.log('model selection ok');
 });

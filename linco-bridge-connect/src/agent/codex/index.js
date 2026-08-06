@@ -31,7 +31,6 @@ const {
   codexFallbackModels,
   codexFallbackReasoningEfforts,
   codexModelInputNeedsLookup,
-  codexReasoningEffortValues,
   codexReasoningInputNeedsLookup,
   codexTurnModelOverride,
   codexTurnReasoningOverride,
@@ -40,7 +39,6 @@ const {
   formatCodexModelList,
   formatCodexReasoningEffortLabel,
   formatCodexReasoningList,
-  isSupportedCodexReasoningEffort,
   normalizeCodexModelEntries,
   normalizeCodexModelList,
   normalizeCodexReasoningEffort,
@@ -234,14 +232,29 @@ async function applyCodexRuntimeSettings(ws, session, config, options = {}) {
     return;
   }
 
-  let effort = effortInput;
-  let model = modelInput;
-  if (modelInput && codexModelInputNeedsLookup(modelInput)) {
-    model = await resolveCodexModelInput(session, config, modelInput);
-  }
-  if (effortInput && codexReasoningInputNeedsLookup(effortInput)) {
-    effort = await resolveCodexReasoningInput(session, config, effortInput);
-  }
+  const entries = await loadCodexActualModelEntries(session, config);
+  const modelNames = withCodexFallbackModels(entries.map(entry => entry.name));
+  const requestedModel = modelInput && codexModelInputNeedsLookup(modelInput)
+    ? resolveModelNameFromList(modelInput, modelNames)
+    : modelInput;
+  const targetModel = requestedModel
+    || session.codexModelOverride
+    || config?.agents?.codex?.model
+    || '';
+  const targetEntry = findCodexModelEntry(entries, targetModel);
+  const availableEfforts = targetEntry
+    ? reasoningIdsForEntry(targetEntry)
+    : codexFallbackReasoningEfforts();
+  const requestedEffort = effortInput && codexReasoningInputNeedsLookup(effortInput)
+    ? resolveModelNameFromList(effortInput, availableEfforts)
+    : effortInput;
+  const validated = validateCodexSettingsCombination({
+    entries,
+    model: targetModel,
+    effort: requestedEffort,
+  });
+  const model = requestedModel ? validated.model : '';
+  const effort = requestedEffort ? validated.effort : '';
 
   const previousModel = session.codexModelOverride || config?.agents?.codex?.model || '(default)';
   const previousEffort = session.codexReasoningEffortOverride || '(model default)';
@@ -253,13 +266,9 @@ async function applyCodexRuntimeSettings(ws, session, config, options = {}) {
     notes.push(`model: ${previousModel} -> ${model}`);
   }
   if (effort) {
-    const normalized = normalizeCodexReasoningEffort(effort);
-    if (!normalized || !isSupportedCodexReasoningEffort(normalized)) {
-      throw new Error(`Unsupported Codex reasoning effort: ${effort}`);
-    }
-    session.codexReasoningEffortOverride = normalized;
+    session.codexReasoningEffortOverride = effort;
     session.codexReasoningEffortDirty = true;
-    notes.push(`effort: ${formatCodexReasoningEffortLabel(previousEffort)} -> ${formatCodexReasoningEffortLabel(normalized)}`);
+    notes.push(`effort: ${formatCodexReasoningEffortLabel(previousEffort)} -> ${formatCodexReasoningEffortLabel(effort)}`);
   }
 
   sendCodexSettingsApplyResult(ws, session, config, {
@@ -419,17 +428,10 @@ function reasoningCodexContext(ws, session, config, options = {}) {
   }
 
   const effortInput = String(options.effort || '').trim();
-  if (effortInput && codexReasoningInputNeedsLookup(effortInput)) {
-    resolveCodexReasoningInput(session, config, effortInput)
-      .then(effort => setCodexReasoningEffort(ws, session, config, effort))
-      .catch(err => {
-        sendError(ws, `Codex reasoning selection failed: ${err.message}`);
-        sendTurnEnd(ws, session, 'error', { error: err.message });
-      });
-    return true;
-  }
-
-  setCodexReasoningEffort(ws, session, config, effortInput);
+  applyCodexReasoningEffort(ws, session, config, effortInput).catch(err => {
+    sendError(ws, `Codex reasoning selection failed: ${err.message}`);
+    sendTurnEnd(ws, session, 'error', { error: err.message });
+  });
   return true;
 }
 
@@ -471,18 +473,29 @@ function sendCodexModelResult(ws, session, config, options = {}) {
   });
 }
 
-function setCodexReasoningEffort(ws, session, config, effort) {
-  const normalized = normalizeCodexReasoningEffort(effort);
+async function applyCodexReasoningEffort(ws, session, config, effortInput) {
+  let choices;
+  try {
+    choices = await loadCodexReasoningChoices(session, config);
+  } catch {
+    choices = {
+      efforts: codexFallbackReasoningEfforts(),
+      hasAuthoritativeModelCapabilities: false,
+    };
+  }
+  const supportedEfforts = choices.hasAuthoritativeModelCapabilities
+    ? choices.efforts
+    : codexFallbackReasoningEfforts();
+  const resolved = codexReasoningInputNeedsLookup(effortInput)
+    ? resolveModelNameFromList(effortInput, supportedEfforts)
+    : effortInput;
+  const normalized = normalizeCodexReasoningEffort(resolved);
   if (!normalized) {
-    sendError(ws, 'Please specify a reasoning effort.');
-    sendTurnEnd(ws, session, 'error', { error: 'missing_reasoning_effort' });
-    return;
+    throw new Error('Please specify a reasoning effort.');
   }
 
-  if (!isSupportedCodexReasoningEffort(normalized)) {
-    sendError(ws, `Unsupported Codex reasoning effort: ${effort}. Use one of: ${codexReasoningEffortValues().join(', ')}.`);
-    sendTurnEnd(ws, session, 'error', { error: 'unsupported_reasoning_effort' });
-    return;
+  if (!supportedEfforts.includes(normalized)) {
+    throw unsupportedCodexReasoningEffortError(resolved, supportedEfforts);
   }
 
   const previous = session.codexReasoningEffortOverride || '(model default)';
@@ -603,15 +616,20 @@ function listCodexReasoningEfforts(ws, session, config) {
 
 function sendCodexReasoningStatus(ws, session, config) {
   loadCodexReasoningChoices(session, config)
-    .then(({ defaultEffort, model }) => {
+    .then(({ efforts, defaultEffort, model }) => {
       sendCodexReasoningResult(ws, session, config, {
         status: 'status',
+        efforts,
         defaultEffort,
         model,
       });
       const lines = [`Codex reasoning effort override: ${session.codexReasoningEffortOverride ? formatCodexReasoningEffortLabel(session.codexReasoningEffortOverride) : '(none)'}`];
       if (defaultEffort) lines.push(`Model default: ${formatCodexReasoningEffortLabel(defaultEffort)}${model ? ` (${model})` : ''}`);
-      lines.push('Use /reasoning <low|medium|high|xhigh> to apply an effort to the next Codex turn and subsequent turns.');
+      if (efforts.length) {
+        lines.push(`Use /reasoning <${efforts.join('|')}> to apply an effort to the next Codex turn and subsequent turns.`);
+      } else {
+        lines.push('The selected model does not support reasoning effort overrides.');
+      }
       sendSystem(ws, lines.join('\n'));
       sendTurnEnd(ws, session);
     })
@@ -628,8 +646,14 @@ function sendCodexReasoningStatus(ws, session, config) {
 
 function sendCodexReasoningResult(ws, session, config, options = {}) {
   const current = currentCodexReasoningEffort(session);
-  const defaultEffort = normalizeCodexReasoningEffort(options.defaultEffort || codexDefaultReasoningEffort(config?.agents?.codex));
-  const efforts = uniqueReasoningEfforts(options.efforts || codexFallbackReasoningEfforts());
+  const defaultEffort = normalizeCodexReasoningEffort(
+    Object.prototype.hasOwnProperty.call(options, 'defaultEffort')
+      ? options.defaultEffort
+      : codexDefaultReasoningEffort(config?.agents?.codex)
+  );
+  const efforts = Object.prototype.hasOwnProperty.call(options, 'efforts')
+    ? uniqueCapabilityReasoningEfforts(options.efforts)
+    : codexFallbackReasoningEfforts();
   send(ws, 'slash_command_result', {
     command: 'reasoning',
     version: 1,
@@ -678,27 +702,63 @@ async function loadCodexActualModelEntries(session, config) {
   return normalizeCodexModelEntries(result);
 }
 
-async function resolveCodexReasoningInput(session, config, input) {
-  const raw = String(input || '').trim();
-  const { efforts } = await loadCodexReasoningChoices(session, config);
-  return resolveModelNameFromList(raw, efforts);
-}
-
 async function loadCodexReasoningChoices(session, config) {
   await ensureAppServer(session, config);
   const result = await rpcRequest(session, nextRpcId(session), 'model/list', { includeHidden: true, limit: 100 });
   const entries = normalizeCodexModelEntries(result);
   const currentModel = String(session.codexModelOverride || config?.agents?.codex?.model || '').trim();
-  const selected = findCodexModelEntry(entries, currentModel) || entries.find(entry => entry.isDefault) || entries[0] || null;
-  const efforts = selected?.supportedReasoningEfforts?.length
-    ? selected.supportedReasoningEfforts
-    : codexFallbackReasoningEfforts();
+  const currentEntry = findCodexModelEntry(entries, currentModel);
+  const selected = currentEntry || entries.find(entry => entry.isDefault) || entries[0] || null;
+  const efforts = selected ? reasoningIdsForEntry(selected) : codexFallbackReasoningEfforts();
+  const connectorDefault = codexDefaultReasoningEffort(config?.agents?.codex);
+  const defaultEffort = selected
+    ? [selected.defaultReasoningEffort, connectorDefault].find(effort => efforts.includes(effort)) || efforts[0] || ''
+    : connectorDefault;
   return {
-    efforts: uniqueReasoningEfforts(efforts),
-    defaultEffort: codexDefaultReasoningEffort(config?.agents?.codex),
-    modelDefaultEffort: selected?.defaultReasoningEffort || null,
+    efforts,
+    defaultEffort,
+    modelDefaultEffort: selected?.defaultReasoningEffort || '',
     model: selected?.name || currentModel || '',
+    hasAuthoritativeModelCapabilities: Boolean(selected && (currentEntry || !currentModel)),
   };
+}
+
+function reasoningIdsForEntry(entry) {
+  if (!entry?.hasReasoningEffortMetadata) return codexFallbackReasoningEfforts();
+  return uniqueCapabilityReasoningEfforts(entry.supportedReasoningEfforts);
+}
+
+function uniqueCapabilityReasoningEfforts(efforts) {
+  const result = [];
+  const seen = new Set();
+  for (const effort of efforts || []) {
+    const raw = effort && typeof effort === 'object' ? effort.id : effort;
+    const normalized = normalizeCodexReasoningEffort(raw);
+    if (!normalized || normalized.length > 120 || /[\x00-\x1f\x7f]/.test(normalized) || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function validateCodexSettingsCombination({ entries = [], model = '', effort = '' } = {}) {
+  const entry = findCodexModelEntry(entries, model);
+  const normalizedEffort = normalizeCodexReasoningEffort(effort);
+  const supportedEfforts = entry ? reasoningIdsForEntry(entry) : codexFallbackReasoningEfforts();
+  if (normalizedEffort && !supportedEfforts.includes(normalizedEffort)) {
+    throw unsupportedCodexReasoningEffortError(effort, supportedEfforts, entry?.name || 'custom model');
+  }
+  return {
+    model: entry?.name || String(model || '').trim(),
+    effort: normalizedEffort,
+  };
+}
+
+function unsupportedCodexReasoningEffortError(effort, supportedEfforts, model = '') {
+  const suffix = supportedEfforts.length
+    ? ` Use one of: ${supportedEfforts.join(', ')}.`
+    : ' This model does not support reasoning efforts.';
+  return new Error(`Unsupported Codex reasoning effort${model ? ` for ${model}` : ''}: ${effort}.${suffix}`);
 }
 
 function sendCodexCompactCommand(ws, session, config, options = {}) {
@@ -2630,11 +2690,14 @@ module.exports = {
     normalizeCodexModelEntries,
     normalizeCodexModelList,
     normalizeCodexReasoningEffort,
+    reasoningIdsForEntry,
     recordCodexThreadReasoning,
     reasoningCodexContext,
     resolveModelNameFromList,
     sendCodexReasoningResult,
+    uniqueCapabilityReasoningEfforts,
     uniqueReasoningEfforts,
+    validateCodexSettingsCombination,
     withCodexFallbackModels,
     buildCodexAppServerEnv,
   },
