@@ -478,19 +478,7 @@ function sendCodexModelResult(ws, session, config, options = {}) {
 }
 
 async function applyCodexReasoningEffort(ws, session, config, effortInput) {
-  await ensureAppServer(session, config);
-  let modelList;
-  try {
-    modelList = await requestCodexModelList(session);
-  } catch {
-    modelList = null;
-  }
-  const choices = modelList === null
-    ? {
-      efforts: codexFallbackReasoningEfforts(),
-      hasAuthoritativeModelCapabilities: false,
-    }
-    : codexReasoningChoicesFromEntries(normalizeCodexModelEntries(modelList), session, config);
+  const choices = await loadCodexReasoningChoicesWithListFallback(session, config);
   const supportedEfforts = choices.hasAuthoritativeModelCapabilities
     ? choices.efforts
     : codexFallbackReasoningEfforts();
@@ -566,8 +554,8 @@ function listCodexModels(ws, session, config) {
 }
 
 function listCodexReasoningEfforts(ws, session, config) {
-  loadCodexReasoningChoices(session, config)
-    .then(({ efforts, defaultEffort, model }) => {
+  loadCodexReasoningChoicesWithListFallback(session, config)
+    .then(({ efforts, defaultEffort, model, listError }) => {
       const current = currentCodexReasoningEffort(session);
       const actions = efforts.map((effort, index) => ({
         label: effort === current ? `* ${formatCodexReasoningEffortLabel(effort)}` : formatCodexReasoningEffortLabel(effort),
@@ -582,9 +570,17 @@ function listCodexReasoningEfforts(ws, session, config) {
         efforts,
         defaultEffort,
         model,
+        listError,
       });
       send(ws, 'system', {
-        text: formatCodexReasoningList(efforts, current, { defaultEffort, model }),
+        text: listError
+          ? [
+            `Current reasoning effort: ${current ? formatCodexReasoningEffortLabel(current) : '(model default)'}`,
+            `Codex model/list failed; showing fallback reasoning efforts. ${listError}`,
+            '',
+            ...efforts.map((effort, index) => `${index + 1}. ${formatCodexReasoningEffortLabel(effort)}${effort === current ? ' (current)' : ''}`),
+          ].join('\n')
+          : formatCodexReasoningList(efforts, current, { defaultEffort, model }),
         actions,
         quickActions: actions,
         quickReplies: actions,
@@ -592,46 +588,23 @@ function listCodexReasoningEfforts(ws, session, config) {
       sendTurnEnd(ws, session);
     })
     .catch(err => {
-      const efforts = codexFallbackReasoningEfforts();
-      const current = session.codexReasoningEffortOverride || '';
-      const actions = efforts.map((effort, index) => ({
-        label: effort === current ? `* ${formatCodexReasoningEffortLabel(effort)}` : formatCodexReasoningEffortLabel(effort),
-        text: `/reasoning switch ${index + 1}`,
-        command: `/reasoning switch ${index + 1}`,
-        type: 'command',
-        action: 'select',
-        effort,
-      }));
-      sendCodexReasoningResult(ws, session, config, {
-        status: 'list',
-        efforts,
-        listError: err.message,
-      });
-      send(ws, 'system', {
-        text: [
-          `Current reasoning effort: ${current ? formatCodexReasoningEffortLabel(current) : '(model default)'}`,
-          `Codex model/list failed; showing fallback reasoning efforts. ${err.message}`,
-          '',
-          ...efforts.map((effort, index) => `${index + 1}. ${formatCodexReasoningEffortLabel(effort)}${effort === current ? ' (current)' : ''}`),
-        ].join('\n'),
-        actions,
-        quickActions: actions,
-        quickReplies: actions,
-      });
-      sendTurnEnd(ws, session);
+      sendError(ws, `Codex reasoning list failed: ${err.message}`);
+      sendTurnEnd(ws, session, 'error', { error: err.message });
     });
 }
 
 function sendCodexReasoningStatus(ws, session, config) {
-  loadCodexReasoningChoices(session, config)
-    .then(({ efforts, defaultEffort, model }) => {
+  loadCodexReasoningChoicesWithListFallback(session, config)
+    .then(({ efforts, defaultEffort, model, listError }) => {
       sendCodexReasoningResult(ws, session, config, {
         status: 'status',
         efforts,
         defaultEffort,
         model,
+        listError,
       });
       const lines = [`Codex reasoning effort override: ${session.codexReasoningEffortOverride ? formatCodexReasoningEffortLabel(session.codexReasoningEffortOverride) : '(none)'}`];
+      if (listError) lines.push(`Codex model/list failed; showing fallback reasoning efforts. ${listError}`);
       if (defaultEffort) lines.push(`Model default: ${formatCodexReasoningEffortLabel(defaultEffort)}${model ? ` (${model})` : ''}`);
       if (efforts.length) {
         lines.push(`Use /reasoning <${efforts.join('|')}> to apply an effort to the next Codex turn and subsequent turns.`);
@@ -641,14 +614,9 @@ function sendCodexReasoningStatus(ws, session, config) {
       sendSystem(ws, lines.join('\n'));
       sendTurnEnd(ws, session);
     })
-    .catch(() => {
-      sendCodexReasoningResult(ws, session, config, {
-        status: 'status',
-      });
-      const lines = [`Codex reasoning effort override: ${session.codexReasoningEffortOverride ? formatCodexReasoningEffortLabel(session.codexReasoningEffortOverride) : '(none)'}`];
-      lines.push('Use /reasoning <low|medium|high|xhigh> to apply an effort to the next Codex turn and subsequent turns.');
-      sendSystem(ws, lines.join('\n'));
-      sendTurnEnd(ws, session);
+    .catch(err => {
+      sendError(ws, `Codex reasoning status failed: ${err.message}`);
+      sendTurnEnd(ws, session, 'error', { error: err.message });
     });
 }
 
@@ -714,13 +682,20 @@ function requestCodexModelList(session) {
   return rpcRequest(session, nextRpcId(session), 'model/list', { includeHidden: true, limit: 100 });
 }
 
-async function loadCodexReasoningChoices(session, config) {
+async function loadCodexReasoningChoicesWithListFallback(session, config) {
   await ensureAppServer(session, config);
-  return loadCodexReasoningChoicesFromReadyAppServer(session, config);
-}
-
-async function loadCodexReasoningChoicesFromReadyAppServer(session, config) {
-  const result = await requestCodexModelList(session);
+  let result;
+  try {
+    result = await requestCodexModelList(session);
+  } catch (err) {
+    return {
+      efforts: codexFallbackReasoningEfforts(),
+      defaultEffort: codexDefaultReasoningEffort(config?.agents?.codex),
+      model: session.codexModelOverride || config?.agents?.codex?.model || '',
+      hasAuthoritativeModelCapabilities: false,
+      listError: err.message,
+    };
+  }
   return codexReasoningChoicesFromEntries(normalizeCodexModelEntries(result), session, config);
 }
 

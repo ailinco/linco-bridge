@@ -558,6 +558,31 @@ const codexReasoningCapabilitiesTest = (async () => {
   assert.strictEqual(startupFailedSession.codexReasoningEffortDirty, false);
   assert.ok(startupFailedWs.sent.some(item => item.type === 'error'));
   assert.strictEqual(startupTurnEnd.reason, 'error');
+
+  for (const [command, suffix] of [['/reasoning', 'list'], ['/reasoning status', 'status']]) {
+    const queryWs = createCaptureWs();
+    const querySession = {
+      id: `session-codex-reasoning-${suffix}-startup-failed`,
+      workspace: process.cwd(),
+      linco: {
+        messageId: `m-codex-reasoning-${suffix}-startup-failed`,
+        streamId: `linco-stream-codex-reasoning-${suffix}-startup-failed`,
+      },
+      agentType: 'codex',
+      agentSessionId: 'codex-thread-1',
+      codexReasoningEffortOverride: 'low',
+      codexReasoningEffortDirty: false,
+      messageQueue: [],
+      agentSessionHistory: [],
+    };
+    assert.strictEqual(handleSlashCommand(command, queryWs, querySession, startupFailedConfig), true);
+    const queryTurnEnd = await waitForWsEvent(queryWs, 'turn_end');
+    assert.strictEqual(querySession.codexReasoningEffortOverride, 'low');
+    assert.strictEqual(querySession.codexReasoningEffortDirty, false);
+    assert.ok(queryWs.sent.some(item => item.type === 'error'));
+    assert.strictEqual(queryTurnEnd.reason, 'error');
+    assert.strictEqual(queryWs.sent.some(item => item.type === 'slash_command_result'), false);
+  }
 })();
 
 {
