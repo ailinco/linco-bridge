@@ -17,7 +17,7 @@ Commands not listed here are passed through to the current Agent by default. Som
 | `/remove-account` / `/delete-account` | Removes the current or specified Agent account configuration. |
 | `/accounts --channel <channel>` | Lists configured account IDs for the specified channel. |
 | `/base` | Shows Linco runtime, session runtime, and attachment directories. |
-| `/get <path>` | Reads an allowed non-hidden file and returns it to remote IM. |
+| `/get <path>` | Reads any ordinary local file accessible to the connector Node.js process and returns it to remote IM. |
 | `/approve` | Shows the current approval mode. |
 | `/approve manual` | Requires manual confirmation for later permission requests and dangerous operations. |
 | `/approve auto` | Automatically confirms later permission requests and dangerous operations while keeping the default permission boundary. |

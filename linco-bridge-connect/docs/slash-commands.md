@@ -17,7 +17,7 @@
 | `/remove-account` / `/delete-account` | 删除当前或指定 Agent 下的账号配置。 |
 | `/accounts --channel <channel>` | 列出指定 channel 下已配置的账号 ID。 |
 | `/base` | 显示 Linco 运行目录、会话运行目录和附件目录。 |
-| `/get <路径>` | 读取当前工作目录、`/project` 项目、运行目录或附件目录内的非隐藏文件并返回给远端 IM；相对路径仍以当前会话目录为准。 |
+| `/get <路径>` | 读取连接器 Node.js 进程有权访问的任意本机普通文件并返回给远端 IM；相对路径仍以当前会话目录为准。 |
 | `/approve` | 显示当前审批模式。 |
 | `/approve manual` | 后续权限请求和危险操作由用户手动确认。 |
 | `/approve auto` | 自动确认权限请求和危险操作，保留默认权限边界。 |

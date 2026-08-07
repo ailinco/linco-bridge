@@ -168,7 +168,7 @@ Agent adapters may send `permission_request` or `danger_warning`. Remote IM shou
 
 When an Agent creates a file, it should usually return a Markdown link with an absolute local path, for example `[filename.ext](absolute-local-path)`. The Agent prompt should only describe this output format and should not expose internal delivery implementation details.
 
-The connector only returns regular, non-hidden files under the current working directory, session runtime directory, or attachment directory. Hidden paths such as `.env`, `.git/config`, and `.ssh/*` are rejected by default.
+The connector returns any ordinary local file readable by its Node.js process. Relative paths retain the current-session directory semantics, while absolute paths may point anywhere on the machine. `/get` does not block hidden, empty, large, executable, or script files; operating-system permissions and transport limits still apply.
 
 ## Internal Metadata
 

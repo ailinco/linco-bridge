@@ -18,7 +18,7 @@ Linco Bridge connector is open-sourced together with a reference platform projec
 - Supports remote IM connections and a local test page for debugging.
 - Supports text, image, and common document attachments.
 - Supports generated file references. Agents return Markdown links with absolute local paths so the remote IM can display clickable file references.
-- Supports validated on-demand file retrieval through `/get <path>` after the remote IM receives a local file reference.
+- Supports on-demand file retrieval through `/get <path>` after the remote IM receives a local file reference.
 - Supports tool and command permission confirmations, dangerous-operation confirmations, and manual/auto/yolo approval modes; `auto` is the default.
 - Supports session history viewing, binding, switching, deletion, and token usage display.
 - Supports channel adapters. `linco` is the official Linco IM adapter, and `linco-demo` is the open-source H5 demo channel.
@@ -233,9 +233,9 @@ When an Agent needs to send a generated file to the user, it should save the fil
 
 The Agent-visible prompt only describes this return format. It does not expose the internal file-fetch command or delivery implementation. After the user clicks the reference, the remote IM can request the file and the connector returns it after validation.
 
-The connector checks whether the path is absolute or relative to the current working directory. It only allows files under the current working directory, session runtime directory, or attachment directory, and it enforces regular-file, size, hidden-path, and dangerous-extension rules. On success, the remote IM receives an `outbound_message` with `mediaName`, `mediaType`, `mediaBase64`, `size`, and `references`.
+The connector checks whether the path is absolute or relative. Relative paths are still resolved from the current workspace, runtime directory, or attachment directory, while absolute paths may point anywhere on the local machine. `/get` sends the file whenever it exists, is an ordinary file, and is readable by the connector Node.js process. It does not additionally block hidden, empty, large, executable, or script files. On success, the remote IM receives an `outbound_message` with `mediaName`, `mediaType`, `mediaBase64`, `size`, and `references`.
 
-By default, hidden files and files under hidden directories cannot be read, including `.env`, `.git/config`, and `.ssh/*`. If compatibility is required, set `ALLOW_HIDDEN_GET_FILES=1` or `allowHiddenGetFiles: true` explicitly.
+`/get` remains subject to operating-system permissions, the connector WebSocket payload limit, and remote transport limits. Run the connector only in a trusted environment because requests entering a valid session can retrieve sensitive local files.
 
 ## Linco Message Metadata
 
@@ -288,7 +288,7 @@ Common commands:
 | `/reload` | Refreshes current Agent memory, reloads local history on the next message, and tries to prestart the process. |
 | `/pc` | Shows the command for opening the current Agent session on PC. Claude/Codex only. |
 | `/base` | Shows runtime and attachment directories. |
-| `/get <path>` | Reads a non-hidden file from the current workspace, runtime, or attachment directory after validation and returns it to the frontend. |
+| `/get <path>` | Reads any ordinary local file accessible to the connector Node.js process and returns it to the frontend. |
 | `/approve` | Shows the current approval mode. |
 | `/approve manual` | Requires manual confirmation for permission requests and dangerous operations. |
 | `/approve auto` | Automatically confirms permission requests and dangerous operations while keeping the default permission boundary. |

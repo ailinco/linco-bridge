@@ -28,9 +28,9 @@ When users switch to `yolo`, Claude/Codex processes may restart so the native pe
 
 Inbound attachments are saved locally. Default limits include attachment count, per-file size, total size, and blocked high-risk executable/script extensions.
 
-File delivery should only return regular non-hidden files under the current working directory, session runtime directory, or attachment directory, and only after size, type, and path validation. Do not relax this to arbitrary absolute paths.
+`/get <path>` may return any ordinary local file readable by the connector Node.js process. Relative paths retain the current-session directory semantics, while absolute paths are not limited to workspace or project roots. Symlinks are resolved and the real target is read.
 
-Hidden files and files under hidden directories are rejected by default, including `.env`, `.git/config`, and `.ssh/*`. This can only be relaxed explicitly with `ALLOW_HIDDEN_GET_FILES=1` or `allowHiddenGetFiles: true`.
+`/get` does not block hidden files, empty files, dangerous extensions, or files above `maxOutgoingAttachmentBytes`. Operating-system permissions, WebSocket payload limits, and remote transport limits still apply. Because a valid session can retrieve sensitive files such as `.env`, `.git/config`, and `.ssh/*`, enable the connector only on trusted machines and accounts.
 
 Agent replies should use Markdown file links whose targets are absolute paths. The remote IM fetches files on demand after the user clicks a reference.
 
