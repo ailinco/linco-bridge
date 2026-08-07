@@ -279,7 +279,7 @@ Common commands:
 | `/chats [limit]` | Lists Codex Desktop sidebar chats. Codex only. |
 | `/bind <Session ID>` | Binds the current IM session to an existing local Agent session. Claude/Codex only. |
 | `/bind --chat <Chat ID>` | Binds to an existing Codex Desktop Chat. Codex only. |
-| `/history [limit]` | Shows recent conversation history for the bound Agent session; defaults to 10 rounds. Claude/Codex only. |
+| `/history [limit]` | Shows recent conversation history for the bound Agent session; defaults to 3 rounds. Claude/Codex only. |
 | `/history --chat <Chat ID> [limit]` | Previews Codex Desktop Chat history without binding. Codex only. |
 | `/history-reload [limit]` | Refreshes local Agent memory, then reloads recent history; exits silently while the current turn is busy. |
 | `/agent` | Shows OpenClaw Agents and allows binding the default Agent for future sessions without switching the current session. OpenClaw only. |

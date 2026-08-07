@@ -1823,7 +1823,7 @@ if (directorySymlinkSupported) {
   assert.strictEqual(ws.sent[0].command, 'history');
   assert.strictEqual(ws.sent[0].data.agentType, 'codex');
   assert.strictEqual(ws.sent[0].data.agentSessionId, sessionId);
-  assert.strictEqual(ws.sent[0].data.returnedRounds, 4);
+  assert.strictEqual(ws.sent[0].data.returnedRounds, 3);
   assert.deepStrictEqual(ws.sent[0].data.rounds.map(round => ({
     user: round.user.text,
     userTimestamp: round.user.timestamp,
@@ -1831,13 +1831,6 @@ if (directorySymlinkSupported) {
     assistantTimestamp: round.assistant.timestamp,
     missing: round.assistant.missing,
   })), [
-    {
-      user: 'first codex prompt',
-      userTimestamp: '2026-06-11T02:00:00.000Z',
-      assistant: 'first codex final answer',
-      assistantTimestamp: '2026-06-11T02:00:03.000Z',
-      missing: false,
-    },
     {
       user: 'second codex prompt',
       userTimestamp: '2026-06-11T02:01:00.000Z',
@@ -1860,8 +1853,8 @@ if (directorySymlinkSupported) {
       missing: false,
     },
   ]);
-  assert.strictEqual(ws.sent[0].data.rounds[0].timestamp, '2026-06-11T02:00:00.000Z');
-  assert.strictEqual(ws.sent[0].data.rounds[0].timestampMs, Date.parse('2026-06-11T02:00:00.000Z'));
+  assert.strictEqual(ws.sent[0].data.rounds[0].timestamp, '2026-06-11T02:01:00.000Z');
+  assert.strictEqual(ws.sent[0].data.rounds[0].timestampMs, Date.parse('2026-06-11T02:01:00.000Z'));
   assert.strictEqual(ws.sent.at(-1).type, 'turn_end');
 }
 

@@ -39,7 +39,7 @@ Commands not listed here are passed through to the current Agent by default. Som
 | `/project --select <path>` | Selects a project and starts a new Agent session. |
 | `/sessions [limit]` | Lists recent local Agent sessions for the current project. |
 | `/bind <Session ID>` | Binds the current IM session to an existing Agent session in the current project. |
-| `/history [limit]` | Shows recent history of the currently bound Agent session. Default is 10 rounds. |
+| `/history [limit]` | Shows recent history of the currently bound Agent session. Default is 3 rounds. |
 | `/history-reload [limit]` / `/sync-history [limit]` | Refreshes local Agent memory, then reloads history. |
 | `/pc` | Shows the command for opening the current Agent session on PC. |
 

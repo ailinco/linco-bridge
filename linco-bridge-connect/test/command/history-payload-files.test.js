@@ -81,18 +81,36 @@ test('buildHistoryPayload keeps text-only history shape unchanged', () => {
   assert.equal(Object.prototype.hasOwnProperty.call(payload.rounds[0].assistant, 'files'), false);
 });
 
-test('history thinking flag is opt-in', () => {
+test('history args default to three rounds while explicit limits remain supported', () => {
+  assert.deepEqual(parseHistoryArgs(''), {
+    ok: true,
+    limit: 3,
+    includeThinking: false,
+  });
+  assert.deepEqual(parseHistoryArgs('--with-thinking'), {
+    ok: true,
+    limit: 3,
+    includeThinking: true,
+  });
+  assert.deepEqual(parseHistoryArgs('--chat chat-1'), {
+    ok: true,
+    limit: 3,
+    chatId: 'chat-1',
+    includeThinking: false,
+  });
+  assert.deepEqual(parseHistoryArgs('--project "/tmp/demo" --session session-1'), {
+    ok: true,
+    limit: 3,
+    projectPath: '/tmp/demo',
+    sessionId: 'session-1',
+    includeThinking: false,
+  });
   assert.deepEqual(parseHistoryArgs('10'), {
     ok: true,
     limit: 10,
     includeThinking: false,
   });
   assert.deepEqual(parseHistoryArgs('--thinking 10'), {
-    ok: true,
-    limit: 10,
-    includeThinking: true,
-  });
-  assert.deepEqual(parseHistoryArgs('--with-thinking'), {
     ok: true,
     limit: 10,
     includeThinking: true,

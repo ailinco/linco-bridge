@@ -20,7 +20,7 @@ function buildHelpPayload(session) {
     items.splice(2, 0,
       helpItem('/pwd', '显示当前项目目录'),
       helpItem('/cd <路径>', '绑定指定项目目录'),
-      helpItem('/history [数量]', '显示当前会话最近聊天内容，默认 10 轮'),
+      helpItem('/history [数量]', '显示当前会话最近聊天内容，默认 3 轮'),
       helpItem('/pc', '显示 PC 端打开当前 Agent 会话的命令'),
     );
     const usageIndex = items.findIndex(item => item.command === '/usage');

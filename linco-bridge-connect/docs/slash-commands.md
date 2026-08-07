@@ -39,7 +39,7 @@
 | `/project --select <路径>` | 选择项目并开启新 Agent 会话。 |
 | `/sessions [--project <路径>] [--project-id <项目ID>] [limit]` | 列出当前项目最近的本地 Agent sessions；Codex 项目 ID 用于合并显式归属会话与未改派的同目录会话，并排除已归到其他项目的会话。 |
 | `/bind <Session ID>` | 将未绑定的 IM 会话绑定到当前项目内已有 Agent session。 |
-| `/history [limit]` | 显示当前已绑定 Agent session 的最近聊天内容，默认 10 轮。 |
+| `/history [limit]` | 显示当前已绑定 Agent session 的最近聊天内容，默认 3 轮。 |
 | `/history-reload [limit]` / `/sync-history [limit]` | 先刷新本地 Agent 记忆，再重新加载历史。 |
 | `/pc` | 显示 PC 端打开当前 Agent 会话的命令。 |
 

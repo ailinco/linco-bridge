@@ -277,7 +277,7 @@ Agent 需要把文件发给用户时，应将文件保存到当前工作目录�
 | `/chats [limit]` | 列出 Codex Desktop 侧边栏 Chats；仅 Codex |
 | `/bind <Session ID>` | 将未绑定的 IM 会话绑定到当前项目内已有 Agent 会话；仅 Claude/Codex |
 | `/bind --chat <Chat ID>` | 将未绑定的 IM 会话绑定到已有 Codex Desktop Chat；仅 Codex |
-| `/history [limit]` | 显示当前已绑定 Agent session 最近聊天内容，默认 10 轮；仅 Claude/Codex |
+| `/history [limit]` | 显示当前已绑定 Agent session 最近聊天内容，默认 3 轮；仅 Claude/Codex |
 | `/history --chat <Chat ID> [limit]` | 预览 Codex Desktop Chat 历史但不自动绑定；仅 Codex |
 | `/history-reload [limit]` | 刷新本地 Agent 记忆后重新加载最近历史；当前回合忙碌时会静默结束 |
 | `/agent` | 查看 OpenClaw Agent，并可用 `/agent --bind <id>` 给当前 IM 账号绑定后续新会话默认 Agent；当前会话 Agent 不可切换；仅 OpenClaw |
