@@ -321,77 +321,6 @@ function stripLineSuffix(value) {
   return String(value || '').replace(/:(\d+)(?::\d+)?$/, '');
 }
 
-function resolveAllowedFileAccess(filePath, session = {}, options = {}) {
-  const requestedPath = path.resolve(filePath);
-  const realFilePath = safeRealpath(requestedPath);
-  const roots = allowedAbsoluteGetRoots(session, options.projectRoots);
-
-  if (realFilePath) {
-    const root = roots.find(item =>
-      item.realPath && isInsideOrSame(realFilePath, item.realPath)
-    );
-    if (root) {
-      return {
-        requestedPath,
-        filePath: realFilePath,
-        root,
-      };
-    }
-  } else {
-    const root = roots.find(item => isInsideOrSame(requestedPath, item.requestedPath));
-    if (root) {
-      return {
-        requestedPath,
-        filePath: requestedPath,
-        root,
-      };
-    }
-  }
-
-  const allowedFiles = Array.isArray(options.allowedFiles) ? options.allowedFiles : [];
-  const exactFile = allowedFiles.find(file =>
-    typeof file === 'string' && sameResolvedPath(requestedPath, file)
-  );
-  if (!exactFile) return null;
-
-  const allowedRealPath = safeRealpath(path.resolve(exactFile));
-  if (realFilePath && (!allowedRealPath || !sameResolvedPath(realFilePath, allowedRealPath))) {
-    return null;
-  }
-  if (
-    realFilePath &&
-    !sameResolvedPath(requestedPath, realFilePath) &&
-    !isKnownMacSystemPathAlias(requestedPath, realFilePath)
-  ) {
-    return null;
-  }
-  return {
-    requestedPath,
-    filePath: realFilePath || requestedPath,
-    exactFile: true,
-  };
-}
-
-function allowedAbsoluteGetRoots(session, projectRoots = []) {
-  const knownProjectRoots = Array.isArray(projectRoots) ? projectRoots : [];
-  const roots = [...allowedGetRoots(session), ...knownProjectRoots].filter(Boolean);
-  const seen = new Set();
-  return roots
-    .map(root => {
-      const requestedPath = path.resolve(root);
-      const realPath = safeRealpath(requestedPath);
-      const key = realPath || requestedPath;
-      if (seen.has(key)) return null;
-      seen.add(key);
-      return { requestedPath, realPath };
-    })
-    .filter(Boolean)
-    .sort((a, b) =>
-      (b.realPath || b.requestedPath).length -
-      (a.realPath || a.requestedPath).length
-    );
-}
-
 function safeRealpath(value) {
   try {
     return fs.realpathSync.native(value);
@@ -400,66 +329,10 @@ function safeRealpath(value) {
   }
 }
 
-function hasHiddenAccessPathSegment(access) {
-  if (access.exactFile) {
-    return hasHiddenAbsolutePathSegment(access.requestedPath) ||
-      hasHiddenAbsolutePathSegment(access.filePath);
-  }
-  const requestedRoot = access.root.requestedPath;
-  if (
-    isInsideOrSame(access.requestedPath, requestedRoot) &&
-    hasHiddenRelativePath(access.requestedPath, requestedRoot)
-  ) {
-    return true;
-  }
-  const realRoot = access.root.realPath;
-  return Boolean(
-    realRoot &&
-    isInsideOrSame(access.filePath, realRoot) &&
-    hasHiddenRelativePath(access.filePath, realRoot)
-  );
-}
-
-function hasHiddenAbsolutePathSegment(filePath) {
-  const resolved = path.resolve(filePath);
-  return hasHiddenRelativePath(resolved, path.parse(resolved).root);
-}
-
-function hasHiddenRelativePath(filePath, root) {
-  const relative = path.relative(root, filePath);
-  return relative
-    .split(path.sep)
-    .filter(Boolean)
-    .some(segment => segment.length > 1 && segment.startsWith('.'));
-}
-
-function hasHiddenPathSegment(filePath, session = {}) {
-  const access = resolveAllowedFileAccess(filePath, session);
-  if (!access) return false;
-  return hasHiddenAccessPathSegment(access);
-}
-
 function isInsideOrSame(filePath, dir) {
   if (!dir) return false;
   const relative = path.relative(path.resolve(dir), path.resolve(filePath));
   return !relative || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-function sameResolvedPath(first, second) {
-  const firstPath = path.resolve(first);
-  const secondPath = path.resolve(second);
-  return process.platform === 'win32'
-    ? firstPath.toLowerCase() === secondPath.toLowerCase()
-    : firstPath === secondPath;
-}
-
-function isKnownMacSystemPathAlias(requestedPath, realFilePath) {
-  if (process.platform !== 'darwin') return false;
-  const requested = path.resolve(requestedPath);
-  if (requested !== '/var' && !requested.startsWith(`/var${path.sep}`)) {
-    return false;
-  }
-  return path.resolve(realFilePath) === path.resolve(`/private${requested}`);
 }
 
 function cleanCandidate(value) {
@@ -518,7 +391,6 @@ module.exports = {
     hasDirectImageGenerationIntent,
     isExplicitFileDeliveryRequest,
     isImageGenerationRequest,
-    hasHiddenPathSegment,
     shouldAddFileReferenceHint,
     FILE_REFERENCE_HINT_MARKER,
     buildFileDeliveryInstructions,

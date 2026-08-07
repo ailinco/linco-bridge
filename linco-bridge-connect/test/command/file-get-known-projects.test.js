@@ -204,3 +204,30 @@ test('relative get paths remain scoped to the current workspace', t => {
     Buffer.from('current').toString('base64'),
   );
 });
+
+test('get returns an error when the final file read fails', t => {
+  const fixture = createFixture();
+  t.after(() => fs.rmSync(fixture.homeDir, { recursive: true, force: true }));
+  const target = path.join(fixture.unlistedDir, 'read-failure.txt');
+  fs.writeFileSync(target, 'content');
+  const originalReadFileSync = fs.readFileSync;
+  fs.readFileSync = (file, ...args) => {
+    if (path.resolve(file) === path.resolve(target)) {
+      const error = new Error('read failed');
+      error.code = 'EACCES';
+      throw error;
+    }
+    return originalReadFileSync(file, ...args);
+  };
+  const ws = createCaptureWs();
+
+  try {
+    handleGet(target, ws, fixture.session, fixture.config);
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+  }
+
+  assert.equal(outboundFile(ws), undefined);
+  assert.equal(ws.sent.at(-1)?.type, 'error');
+  assert.match(ws.sent.at(-1)?.text ?? '', /读取文件失败/);
+});

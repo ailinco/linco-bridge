@@ -317,7 +317,7 @@ For example, `/help` returns `command: "help"` plus `data.items[].command` and `
 - `/approve auto` allows subsequent permission requests and dangerous-operation confirmations. Use `/approve manual` when human confirmation is required.
 - `/approve yolo` attempts to use the Agent's native permission or sandbox bypass mode and should only be used in trusted environments.
 - Attachments are saved locally. Avoid uploading sensitive files that should not be written to disk.
-- File delivery rejects hidden files and hidden directories by default to avoid accidental delivery of `.env`, `.git/config`, `.ssh/*`, and similar sensitive files.
+- `/get` can deliver sensitive files such as `.env`, `.git/config`, and `.ssh/*` and does not restrict extensions or file sizes. Use it only in trusted environments and rely on operating-system permissions and transport limits to control exposure.
 
 ## Development Commands
 

@@ -1,6 +1,6 @@
 # Security Notes
 
-The Linco Bridge connector runs on the user's machine and bridges remote IM with local Agents. The core security principle is: credentials stay local, file reads are constrained, and dangerous operations require an explicit policy.
+The Linco Bridge connector runs on the user's machine and bridges remote IM with local Agents. The core security principle is: credentials stay local, `/get` file access follows the connector process's operating-system permissions, and dangerous operations require an explicit policy.
 
 ## Local Credentials
 
@@ -50,6 +50,6 @@ Add focused tests when changing:
 | --- | --- |
 | New message types | Protocol conversion and `turn_end` completion. |
 | New slash commands | `slash_command_result` shape, error branches, and busy state. |
-| File handling | Path traversal, dangerous extensions, hidden paths, and size limits. |
+| File handling | Dangerous-extension and size limits for inbound attachments; ordinary-file, unreadable-file, and final-read failures for `/get`. |
 | Credential handling | Log redaction and URL redaction. |
 | Permission behavior | `manual`, `auto`, and `yolo` modes. |

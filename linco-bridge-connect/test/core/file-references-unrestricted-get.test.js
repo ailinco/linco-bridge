@@ -46,3 +46,28 @@ test('get validation allows every readable ordinary file', t => {
   );
   assert.equal(validateGetFile(outside, session, config).code, 'not_file');
 });
+
+test('get validation reports a readable file access failure', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-unreadable-get-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const target = path.join(root, 'unreadable.txt');
+  fs.writeFileSync(target, 'content');
+  const originalAccessSync = fs.accessSync;
+  fs.accessSync = file => {
+    if (path.resolve(file) === path.resolve(target)) {
+      const error = new Error('access denied');
+      error.code = 'EACCES';
+      throw error;
+    }
+    return originalAccessSync(file, fs.constants.R_OK);
+  };
+
+  try {
+    const result = validateGetFile(target, {}, {});
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'unreadable');
+    assert.match(result.message, /无法读取文件/);
+  } finally {
+    fs.accessSync = originalAccessSync;
+  }
+});
