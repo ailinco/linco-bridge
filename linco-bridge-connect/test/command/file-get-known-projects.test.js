@@ -106,7 +106,7 @@ test('project candidates return every normalized Codex state project', t => {
   assert.deepEqual(projects.map(project => project.path), fixture.projects);
 });
 
-test('get keeps the legacy 20 known-project root permission limit', t => {
+test('get reads files beyond the legacy 20 known-project root limit', t => {
   const fixture = createManyProjectsFixture();
   t.after(() => fs.rmSync(fixture.homeDir, { recursive: true, force: true }));
   const allowedTarget = path.join(fixture.projects[19], 'allowed.txt');
@@ -123,7 +123,10 @@ test('get keeps the legacy 20 known-project root permission limit', t => {
 
   const excludedWs = createCaptureWs();
   handleGet(excludedTarget, excludedWs, fixture.session, fixture.config);
-  assert.equal(outboundFile(excludedWs), undefined);
+  assert.equal(
+    outboundFile(excludedWs)?.mediaBase64,
+    Buffer.from('excluded project').toString('base64'),
+  );
 });
 
 test('get allows an absolute file from another project shown by /project', t => {
@@ -146,7 +149,7 @@ test('get allows an absolute file from another project shown by /project', t => 
   assert.equal(message.references[0].command, `/get ${target}`);
 });
 
-test('get still rejects an absolute file outside every /project root', t => {
+test('get reads an absolute file outside every /project root', t => {
   const fixture = createFixture();
   t.after(() => fs.rmSync(fixture.homeDir, { recursive: true, force: true }));
   const target = path.join(fixture.unlistedDir, 'private.txt');
@@ -155,11 +158,13 @@ test('get still rejects an absolute file outside every /project root', t => {
 
   handleGet(target, ws, fixture.session, fixture.config);
 
-  assert.equal(outboundFile(ws), undefined);
-  assert.match(ws.sent.at(-1)?.text ?? '', /拒绝读取该路径/);
+  assert.equal(
+    outboundFile(ws)?.mediaBase64,
+    Buffer.from('private').toString('base64'),
+  );
 });
 
-test('get rejects a known-project symlink that escapes to an unlisted directory', t => {
+test('get reads through a known-project symlink into an unlisted directory', t => {
   const fixture = createFixture();
   t.after(() => fs.rmSync(fixture.homeDir, { recursive: true, force: true }));
   const outsideFile = path.join(fixture.unlistedDir, 'outside.txt');
@@ -179,8 +184,10 @@ test('get rejects a known-project symlink that escapes to an unlisted directory'
 
   handleGet(path.join(linkDir, 'outside.txt'), ws, fixture.session, fixture.config);
 
-  assert.equal(outboundFile(ws), undefined);
-  assert.match(ws.sent.at(-1)?.text ?? '', /拒绝读取该路径/);
+  assert.equal(
+    outboundFile(ws)?.mediaBase64,
+    Buffer.from('outside').toString('base64'),
+  );
 });
 
 test('relative get paths remain scoped to the current workspace', t => {

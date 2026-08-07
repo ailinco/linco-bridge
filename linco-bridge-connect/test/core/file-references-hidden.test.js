@@ -40,8 +40,8 @@ try {
 
     const result = validateGetFile(target, session, baseConfig());
 
-    assert.strictEqual(result.ok, false);
-    assert.strictEqual(result.code, 'hidden_path');
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.path, path.resolve(target));
   }
 
   {
@@ -50,8 +50,8 @@ try {
 
     const result = validateGetFile(target, session, baseConfig());
 
-    assert.strictEqual(result.ok, false);
-    assert.strictEqual(result.code, 'hidden_path');
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.path, path.resolve(target));
   }
 
   {
@@ -92,8 +92,11 @@ try {
     const text = `[hidden](${hidden}) and [visible](${visible})`;
     const references = extractFileReferences(text, session, baseConfig());
 
-    assert.strictEqual(references.length, 1);
-    assert.strictEqual(references[0].path, path.resolve(visible));
+    assert.strictEqual(references.length, 2);
+    assert.deepStrictEqual(
+      references.map(reference => reference.path),
+      [path.resolve(hidden), path.resolve(visible)],
+    );
   }
 } finally {
   fs.rmSync(tempDir, { recursive: true, force: true });

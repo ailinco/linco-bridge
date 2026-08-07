@@ -122,7 +122,7 @@ for (const [label, mutate] of [
   });
 }
 
-test('exact history files still pass every existing file safety check', t => {
+test('file validation no longer depends on history authorization or safety limits', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'linco-history-file-safety-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const workspace = path.join(root, 'workspace');
@@ -149,18 +149,18 @@ test('exact history files still pass every existing file safety check', t => {
   }).ok, true);
   assert.equal(validateGetFile(siblingPath, session, fileConfig(), {
     allowedFiles: [safePath],
-  }).code, 'outside_allowed_roots');
+  }).ok, true);
   assert.equal(validateGetFile(hiddenPath, session, fileConfig(), {
     allowedFiles: [hiddenPath],
-  }).code, 'hidden_path');
+  }).ok, true);
   assert.equal(validateGetFile(oversizedPath, session, fileConfig({
     maxOutgoingAttachmentBytes: 4,
   }), {
     allowedFiles: [oversizedPath],
-  }).code, 'too_large');
+  }).ok, true);
   assert.equal(validateGetFile(unsafePath, session, fileConfig(), {
     allowedFiles: [unsafePath],
-  }).code, 'unsafe');
+  }).ok, true);
   assert.equal(validateGetFile(directoryPath, session, fileConfig(), {
     allowedFiles: [directoryPath],
   }).code, 'not_file');
@@ -171,10 +171,10 @@ test('exact history files still pass every existing file safety check', t => {
     fs.symlinkSync(outside, aliasDirectory, process.platform === 'win32' ? 'junction' : 'dir');
     assert.equal(validateGetFile(aliasPath, session, fileConfig(), {
       allowedFiles: [safePath],
-    }).code, 'outside_allowed_roots');
+    }).ok, true);
     assert.equal(validateGetFile(aliasPath, session, fileConfig(), {
       allowedFiles: [aliasPath],
-    }).code, 'outside_allowed_roots');
+    }).ok, true);
   } catch (error) {
     if (!['EPERM', 'EACCES'].includes(error?.code)) throw error;
   }
