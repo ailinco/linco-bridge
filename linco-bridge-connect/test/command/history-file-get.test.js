@@ -83,7 +83,7 @@ function createFixture() {
   };
 }
 
-test('history authorizes only its current project and Agent Session temporary image', t => {
+test('history authorization metadata no longer gates get file access', t => {
   const fixture = createFixture();
   t.after(() => {
     fs.rmSync(fixture.homeDir, { recursive: true, force: true });
@@ -92,7 +92,10 @@ test('history authorizes only its current project and Agent Session temporary im
 
   const beforeHistoryWs = createCaptureWs();
   handleGet(fixture.imagePath, beforeHistoryWs, fixture.session, fixture.config);
-  assert.equal(outboundFile(beforeHistoryWs), undefined);
+  assert.equal(
+    outboundFile(beforeHistoryWs)?.mediaBase64,
+    Buffer.from('history-image').toString('base64'),
+  );
 
   const historyWs = createCaptureWs();
   handleHistory('1', historyWs, fixture.session, { homeDir: fixture.homeDir });
@@ -109,17 +112,26 @@ test('history authorizes only its current project and Agent Session temporary im
 
   const siblingWs = createCaptureWs();
   handleGet(fixture.siblingPath, siblingWs, fixture.session, fixture.config);
-  assert.equal(outboundFile(siblingWs), undefined);
+  assert.equal(
+    outboundFile(siblingWs)?.mediaBase64,
+    Buffer.from('sibling-image').toString('base64'),
+  );
 
   fixture.session.workspace = fixture.otherWorkspace;
   const otherProjectWs = createCaptureWs();
   handleGet(fixture.imagePath, otherProjectWs, fixture.session, fixture.config);
-  assert.equal(outboundFile(otherProjectWs), undefined);
+  assert.equal(
+    outboundFile(otherProjectWs)?.mediaBase64,
+    Buffer.from('history-image').toString('base64'),
+  );
 
   fixture.session.workspace = fixture.workspace;
   handleHistory('1', createCaptureWs(), fixture.session, { homeDir: fixture.homeDir });
   fixture.session.agentSessionId = 'another-agent-session';
   const otherSessionWs = createCaptureWs();
   handleGet(fixture.imagePath, otherSessionWs, fixture.session, fixture.config);
-  assert.equal(outboundFile(otherSessionWs), undefined);
+  assert.equal(
+    outboundFile(otherSessionWs)?.mediaBase64,
+    Buffer.from('history-image').toString('base64'),
+  );
 });

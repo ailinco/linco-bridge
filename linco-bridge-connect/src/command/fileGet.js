@@ -1,7 +1,5 @@
 const { buildOutboundFileMessage, resolveGetTarget, validateGetFile } = require('../core/fileReferences');
-const { authorizedHistoryFiles } = require('../core/historyFileAccess');
 const { send, sendError } = require('../core/protocol');
-const { knownProjectCandidates } = require('./project');
 
 function handleGet(rawTarget, ws, session, config) {
   const resolved = resolveGetTarget(rawTarget, session);
@@ -10,25 +8,22 @@ function handleGet(rawTarget, ws, session, config) {
     return;
   }
 
-  const projectRoots = knownProjectCandidates(session, {
-    homeDir: config?.homeDir,
-    limit: 20,
-  }).map(project => project.path);
-  const validation = validateGetFile(resolved, session, config, {
-    projectRoots,
-    allowedFiles: authorizedHistoryFiles(session),
-  });
+  const validation = validateGetFile(resolved, session, config);
   if (!validation.ok) {
     sendError(ws, validation.message);
     return;
   }
 
-  send(ws, 'outbound_message', buildOutboundFileMessage(
-    session,
-    validation.path,
-    validation.size,
-    { readPath: validation.readPath },
-  ));
+  try {
+    send(ws, 'outbound_message', buildOutboundFileMessage(
+      session,
+      validation.path,
+      validation.size,
+      { readPath: validation.readPath },
+    ));
+  } catch {
+    sendError(ws, `读取文件失败：${resolved}`);
+  }
 }
 
 module.exports = {

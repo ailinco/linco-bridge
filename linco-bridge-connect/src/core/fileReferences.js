@@ -120,52 +120,35 @@ function allowedGetRoots(session) {
   return [session.workspace, session.runtimeDir, session.attachmentsDir].filter(Boolean);
 }
 
-function validateGetFile(filePath, session, config, options = {}) {
+function validateGetFile(filePath, _session, _config, _options = {}) {
   const resolved = path.resolve(filePath);
-  const access = resolveAllowedFileAccess(resolved, session, options);
-  if (!access) {
-    return {
-      ok: false,
-      code: 'outside_allowed_roots',
-      message: '拒绝读取该路径：只能获取当前工作目录、/project 项目、运行目录或附件目录内的文件。',
-    };
-  }
-
-  if (!config.allowHiddenGetFiles && hasHiddenAccessPathSegment(access)) {
-    return { ok: false, code: 'hidden_path', message: `拒绝读取隐藏文件或隐藏目录下的文件：${path.basename(resolved)}` };
-  }
+  const readPath = safeRealpath(resolved) || resolved;
 
   let stat;
   try {
-    stat = fs.statSync(access.filePath);
-  } catch {
-    return { ok: false, code: 'missing', message: `文件不存在：${resolved}` };
+    stat = fs.statSync(readPath);
+  } catch (err) {
+    const code = err?.code === 'ENOENT' ? 'missing' : 'unreadable';
+    const message = code === 'missing'
+      ? `文件不存在：${resolved}`
+      : `无法读取文件：${resolved}`;
+    return { ok: false, code, message };
   }
 
   if (!stat.isFile()) {
     return { ok: false, code: 'not_file', message: `不是普通文件：${resolved}` };
   }
 
-  if (stat.size <= 0) {
-    return { ok: false, code: 'empty', message: `文件为空：${resolved}` };
-  }
-
-  if (stat.size > config.maxOutgoingAttachmentBytes) {
-    return {
-      ok: false,
-      code: 'too_large',
-      message: `文件超过发送大小限制 ${(config.maxOutgoingAttachmentBytes / 1024 / 1024).toFixed(0)}MB：${resolved}`,
-    };
-  }
-
-  if (!config.allowUnsafeAttachments && isUnsafeAttachmentPath(access.filePath, config)) {
-    return { ok: false, code: 'unsafe', message: `出于安全原因，默认不允许下发该类型文件：${path.basename(resolved)}` };
+  try {
+    fs.accessSync(readPath, fs.constants.R_OK);
+  } catch {
+    return { ok: false, code: 'unreadable', message: `无法读取文件：${resolved}` };
   }
 
   return {
     ok: true,
     path: resolved,
-    readPath: access.filePath,
+    readPath,
     size: stat.size,
   };
 }
@@ -336,11 +319,6 @@ function stripWrappingQuotes(value) {
 
 function stripLineSuffix(value) {
   return String(value || '').replace(/:(\d+)(?::\d+)?$/, '');
-}
-
-function isUnsafeAttachmentPath(filePath, config) {
-  const ext = path.extname(filePath).toLowerCase();
-  return new Set(config.unsafeAttachmentExtensions || []).has(ext);
 }
 
 function resolveAllowedFileAccess(filePath, session = {}, options = {}) {
